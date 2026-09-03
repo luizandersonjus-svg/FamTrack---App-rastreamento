@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Background circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0"/>
+    <!-- Location pin -->
+    <path
+        android:fillColor="#1976D2"
+        android:pathData="M54,30c-9.94,0 -18,8.06 -18,18c0,13.5 18,30 18,30s18,-16.5 18,-30c0,-9.94 -8.06,-18 -18,-18zM54,60c-5.52,0 -10,-4.48 -10,-10s4.48,-10 10,-10s10,4.48 10,10s-4.48,10 -10,10z"/>
+    <!-- Small circle in pin -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,48m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0"/>
+</vector>

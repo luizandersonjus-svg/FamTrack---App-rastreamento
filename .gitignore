@@ -1,0 +1,28 @@
+# ===== Android / Kotlin =====
+*.iml
+.gradle/
+build/
+**/build/
+.kotlin/
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+local.properties
+
+# ===== Arquivos de seguranca/credenciais =====
+*.keystore
+*.jks
+debug_cert.der
+cert.bin
+*.crt
+*.pem
+
+# ===== Ambiente =====
+*.log
+.DS_Store
+Thumbs.db
