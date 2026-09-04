@@ -67,6 +67,16 @@ class LocationRepository {
             .decodeList<RoutePoint>()
     }
 
+    /**
+     * Histórico de rota de um usuário em um dia específico (prefixo yyyy-MM-dd).
+     * Retorna os pontos em ordem cronológica.
+     */
+    suspend fun getRouteHistoryForDay(familyId: String, userId: String, date: String): List<RoutePoint> {
+        return getRouteHistory(familyId, userId)
+            .filter { it.recorded_at?.startsWith(date) == true }
+            .sortedBy { it.recorded_at }
+    }
+
     suspend fun saveRoutePoint(routePoint: RoutePoint) {
         client.from("route_history").insert(routePoint)
     }

@@ -44,6 +44,15 @@ class GeofenceWorker(
             val locations = locationRepository.getFamilyLocations(familyId)
             val memberLocations = locations.groupBy { it.user_id }
 
+            // Nome de exibição de cada membro (para avisar quem chegou/saiu)
+            val displayNames = try {
+                familyRepository.getFamilyMemberDisplay(familyId)
+                    .associate { it.user_id to it.display_name }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                emptyMap()
+            }
+
             for ((userId, userLocations) in memberLocations) {
                 if (userId == user.id) continue
 
@@ -62,15 +71,16 @@ class GeofenceWorker(
 
                     val isInside = distance[0] <= geofence.radius_meters
                     val wasInside = isUserInsideGeofence(userId, geofence.id!!)
+                    val memberName = displayNames[userId] ?: "Um membro"
 
                     if (!wasInside && isInside) {
-                        val title = "Entrou na area"
-                        val message = "Um membro entrou em: ${geofence.name}"
+                        val title = geofence.name
+                        val message = "$memberName chegou em ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode())
                         insertGeofenceNotification(user.id, familyId, title, message)
                     } else if (wasInside && !isInside) {
-                        val title = "Saiu da area"
-                        val message = "Um membro saiu de: ${geofence.name}"
+                        val title = geofence.name
+                        val message = "$memberName saiu de ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode() + 1)
                         insertGeofenceNotification(user.id, familyId, title, message)
                     }

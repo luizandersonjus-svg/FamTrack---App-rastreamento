@@ -24,8 +24,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.Location as FamLocation
+import com.famtrack.app.data.remote.FamilyMemberDisplay
 import com.famtrack.app.data.remote.FamilyRepository
+import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
 import com.famtrack.app.data.remote.SosRepository
 import com.famtrack.app.data.remote.SupabaseClient
@@ -34,7 +37,9 @@ import io.github.jan.supabase.auth.auth
 import com.google.android.gms.location.*
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.maps.android.compose.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,6 +55,7 @@ fun HomeScreen(
     val locationRepository = remember { LocationRepository() }
     val familyRepository = remember { FamilyRepository() }
     val sosRepository = remember { SosRepository() }
+    val geofenceRepository = remember { GeofenceRepository() }
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -66,6 +72,11 @@ fun HomeScreen(
     var selectedTab by remember { mutableIntStateOf(0) }
     var userId by remember { mutableStateOf<String?>(null) }
     var familyId by remember { mutableStateOf<String?>(null) }
+    var familyName by remember { mutableStateOf<String?>(null) }
+    var memberInfos by remember { mutableStateOf<Map<String, FamilyMemberDisplay>>(emptyMap()) }
+    var memberAvatars by remember { mutableStateOf<Map<String, android.graphics.Bitmap>>(emptyMap()) }
+    var geofences by remember { mutableStateOf<List<Geofence>>(emptyList()) }
+    var currentSteps by remember { mutableStateOf<Pair<String?, Int>?>(null) }
     var showSosConfirm by remember { mutableStateOf(false) }
     var sosMessage by remember { mutableStateOf<String?>(null) }
 
@@ -110,6 +121,20 @@ fun HomeScreen(
                 if (member != null) {
                     familyId = member.family_id
                     familyLocations = locationRepository.getFamilyLocations(member.family_id)
+                    // Carrega o nome da família e o nome de cada membro
+                    try {
+                        familyName = familyRepository.getFamilyById(member.family_id)?.name
+                        memberInfos = familyRepository.getFamilyMemberDisplay(member.family_id)
+                            .associateBy { it.user_id }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    // Carrega as geofences (locais conhecidos) da família
+                    try {
+                        geofences = geofenceRepository.getFamilyGeofences(member.family_id)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                     // Carrega alertas SOS ativos da família
                     try {
                         activeSosAlerts = sosRepository.getActiveSosAlerts(member.family_id)
@@ -136,6 +161,52 @@ fun HomeScreen(
                 ),
                 1000
             )
+        }
+    }
+    // Mantém o mapa atualizado: busca as posições dos membros a cada 10 segundos
+    LaunchedEffect(familyId) {
+        val fid = familyId ?: return@LaunchedEffect
+        while (true) {
+            kotlinx.coroutines.delay(10_000)
+            try {
+                familyLocations = locationRepository.getFamilyLocations(fid)
+                activeSosAlerts = sosRepository.getActiveSosAlerts(fid)
+                geofences = geofenceRepository.getFamilyGeofences(fid)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+                        
+    LaunchedEffect(memberInfos) {
+        val entries = memberInfos.values.mapNotNull { info ->
+            info.avatar_url?.let { url -> info.user_id to url }
+        }
+        if (entries.isEmpty()) return@LaunchedEffect
+        val loaded = withContext(Dispatchers.IO) {
+            entries.mapNotNull { (id, url) ->
+                val bmp = try {
+                    java.net.URL(url).openStream().use { stream ->
+                        android.graphics.BitmapFactory.decodeStream(stream)?.let {
+                            android.graphics.Bitmap.createScaledBitmap(it, 120, 120, true)
+                        }
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+                if (bmp != null) id to bmp else null
+            }.toMap()
+        }
+        memberAvatars = loaded
+    }
+
+    // Acompanha os passos acumulados no local atual (dados do serviço do próprio aparelho)
+    LaunchedEffect(Unit) {
+        while (true) {
+            currentSteps = LocationService.currentPlaceName?.let { name ->
+                name to LocationService.currentPlaceSteps
+            }
+            kotlinx.coroutines.delay(2000)
         }
     }
 
@@ -321,6 +392,8 @@ fun HomeScreen(
                 )
             ) {
                 familyLocations.forEach { location ->
+                    val info = memberInfos[location.user_id]
+                    val avatar = memberAvatars[location.user_id]
                     Marker(
                         state = MarkerState(
                             position = com.google.android.gms.maps.model.LatLng(
@@ -328,7 +401,14 @@ fun HomeScreen(
                                 location.longitude
                             )
                         ),
-                        title = location.user_id
+                        title = info?.display_name ?: "Membro",
+                        icon = if (avatar != null) {
+                            com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(avatar)
+                        } else {
+                            com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
+                                com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_AZURE
+                            )
+                        }
                     )
                 }
                 activeSosAlerts.forEach { alert ->
@@ -343,6 +423,29 @@ fun HomeScreen(
                         icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
                             .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_RED),
                         zIndex = 10f
+                    )
+                }
+                geofences.forEach { geofence ->
+                    val center = com.google.android.gms.maps.model.LatLng(
+                        geofence.center_lat,
+                        geofence.center_lon
+                    )
+                    val strokeColor = try {
+                        Color(android.graphics.Color.parseColor(geofence.color))
+                    } catch (e: Exception) {
+                        Color.Red
+                    }
+                    val fillColor = strokeColor.copy(alpha = 0.3f)
+                    Circle(
+                        center = center,
+                        radius = geofence.radius_meters,
+                        strokeColor = strokeColor,
+                        fillColor = fillColor,
+                        strokeWidth = 3f
+                    )
+                    Marker(
+                        state = MarkerState(position = center),
+                        title = geofence.name
                     )
                 }
             }
@@ -389,7 +492,16 @@ fun HomeScreen(
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
                 Text(
-                    text = "${familyLocations.size} membros na familia",
+                    text = buildString {
+                        append(familyName ?: "Familia")
+                        append(" • ")
+                        append(familyLocations.size)
+                        append(if (familyLocations.size == 1) " membro" else " membros")
+                        val steps = currentSteps
+                        if (steps != null && steps.first != null) {
+                            append(" • ${steps.first}: ${steps.second} passos")
+                        }
+                    },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Medium,

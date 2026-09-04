@@ -2,7 +2,10 @@ package com.famtrack.app.ui.settings
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -16,6 +19,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import coil.compose.AsyncImage
+import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
@@ -214,49 +223,255 @@ fun SettingsScreen(
     }
 }
 
+/**
+ * Diálogo de PERFIL: mostra o e-mail e permite EDITAR o nome
+ * (o "nickname" que aparece no pino do mapa).
+ */
 @Composable
 fun ProfileDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val familyRepository = remember { FamilyRepository() }
     val user = SupabaseClient.getInstance().auth.currentUserOrNull()
+
+    // Campo do nome; começa vazio e tenta carregar o nickname atual
+    var nameField by remember { mutableStateOf("") }
+    var loadedName by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    // Foto do perfil atual (vem do Google em userMetadata, ou de family_members)
+    var avatarUrl by remember { mutableStateOf<String?>(null) }
+
+    // Ao abrir, carrega o nickname e o avatar atual do usuário (se existir)
+    LaunchedEffect(user?.id) {
+        val uid = user?.id ?: return@LaunchedEffect
+        try {
+            val current = familyRepository.getMyNickname(uid)
+            if (current != null) {
+                nameField = current
+            } else {
+                // Se ainda não tem nickname, sugere o nome do Google (se houver)
+                nameField = user.userMetadata?.get("full_name")?.toString() ?: ""
+            }
+        } catch (e: Exception) {
+            // ignora — deixa o campo vazio
+        }
+        // Avatar: primeiro tenta o do Google, depois o salvo na família
+        avatarUrl = user.userMetadata?.get("avatar_url")?.toString()
+            ?: user.userMetadata?.get("picture")?.toString()
+        if (avatarUrl == null) {
+            try {
+                avatarUrl = familyRepository.getUserFamily(uid)?.avatar_url
+            } catch (e: Exception) {
+                // ignora — fica sem foto
+            }
+        }
+        loadedName = true
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Perfil") },
         text = {
             Column {
                 Text("Email: ${user?.email ?: "Nao disponivel"}")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("ID: ${user?.id?.take(8) ?: "N/A"}...")
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Fechar") }
-        }
-    )
-}
-
-@Composable
-fun FamilyDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Familia") },
-        text = {
-            Column {
-                Text("Para gerenciar membros da familia:")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("1. Compartilhe o codigo da sua familia com seus familiares")
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("2. Eles podem entrar e se juntar a familia")
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("3. Todos os membros aparecerao no mapa")
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Em breve: tela de gerenciamento de familia",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                val avatar = avatarUrl
+                if (avatar != null) {
+                    AsyncImage(
+                        model = avatar,
+                        contentDescription = "Foto do perfil",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                } else {
+                    androidx.compose.material3.Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Default.Person,
+                        contentDescription = "Sem foto",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(80.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+                OutlinedTextField(
+                    value = nameField,
+                    onValueChange = { nameField = it },
+                    label = { Text("Seu nome") },
+                    placeholder = { Text("Como seus familiares vao te ver") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Fechar") }
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (nameField.isBlank()) {
+                        Toast.makeText(context, "Digite um nome", Toast.LENGTH_SHORT).show()
+                        return@TextButton
+                    }
+                    saving = true
+                    scope.launch {
+                        try {
+                            familyRepository.updateMyNickname(nameField.trim())
+                            Toast.makeText(context, "Nome atualizado!", Toast.LENGTH_SHORT).show()
+                            onDismiss()
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Erro ao salvar: ${e.message}", Toast.LENGTH_LONG).show()
+                            saving = false
+                        }
+                    }
+                }
+            ) {
+                Text(if (saving) "Salvando..." else "Salvar")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancelar") }
+        }
+    )
+}
+
+/**
+ * Diálogo de FAMÍLIA: mostra o código de convite (com botão copiar)
+ * e permite renomear a família (se você for o criador).
+ */
+@Composable
+fun FamilyDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+    val familyRepository = remember { FamilyRepository() }
+
+    val user = SupabaseClient.getInstance().auth.currentUserOrNull()
+    var familyName by remember { mutableStateOf<String?>(null) }
+    var inviteCode by remember { mutableStateOf<String?>(null) }
+    var familyId by remember { mutableStateOf<String?>(null) }
+    var isCreator by remember { mutableStateOf(false) }
+    var nameField by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+
+    // Ao abrir, carrega a família do usuário
+    LaunchedEffect(user?.id) {
+        val uid = user?.id ?: return@LaunchedEffect
+        try {
+            val member = familyRepository.getUserFamily(uid)
+            if (member != null) {
+                familyId = member.family_id
+                val fam = familyRepository.getFamilyById(member.family_id)
+                familyName = fam?.name
+                inviteCode = fam?.invite_code
+                isCreator = fam?.creator_id == uid
+                nameField = fam?.name ?: ""
+            }
+        } catch (e: Exception) {
+            // ignora
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Familia") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                if (familyName != null) {
+                    Text(
+                        text = "Familia: $familyName",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                if (inviteCode != null) {
+                    Text("Codigo de convite:", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = inviteCode!!,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = {
+                            clipboard.setText(AnnotatedString(inviteCode!!))
+                            Toast.makeText(context, "Codigo copiado!", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Text("Copiar")
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Compartilhe este codigo com quem voce quer na familia.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text("Voce ainda nao esta em uma familia.")
+                }
+
+                if (isCreator && familyId != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "Renomear familia",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = nameField,
+                        onValueChange = { nameField = it },
+                        label = { Text("Novo nome da familia") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else if (!isCreator && familyId != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Apenas quem criou a familia pode renomea-la.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (isCreator && familyId != null) {
+                TextButton(
+                    enabled = !saving,
+                    onClick = {
+                        if (nameField.isBlank()) return@TextButton
+                        saving = true
+                        scope.launch {
+                            val ok = familyRepository.renameFamily(familyId!!, nameField.trim())
+                            if (ok) {
+                                Toast.makeText(context, "Familia renomeada!", Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            } else {
+                                Toast.makeText(context, "Sem permissao para renomear.", Toast.LENGTH_LONG).show()
+                                saving = false
+                            }
+                        }
+                    }
+                ) {
+                    Text(if (saving) "Salvando..." else "Salvar nome")
+                }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Fechar") }
+            }
+        },
+        dismissButton = {
+            if (isCreator && familyId != null) {
+                TextButton(onClick = onDismiss) { Text("Cancelar") }
+            }
         }
     )
 }
@@ -316,18 +531,9 @@ fun AboutDialog(onDismiss: () -> Unit) {
         title = { Text("Sobre o FamTrack") },
         text = {
             Column {
-                Text("FamTrack", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text("Versao 1.0.0")
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Versao: 1.0.0")
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Um app de rastreamento familiar em tempo real.")
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("Funcionalidades:")
-                Spacer(modifier = Modifier.height(4.dp))
-                Text("- Mapa com localizacao em tempo real", style = MaterialTheme.typography.bodySmall)
-                Text("- Alerta SOS", style = MaterialTheme.typography.bodySmall)
-                Text("- Geofences", style = MaterialTheme.typography.bodySmall)
-                Text("- Historico de rotas", style = MaterialTheme.typography.bodySmall)
+                Text("App de rastreamento familiar.")
             }
         },
         confirmButton = {
@@ -342,20 +548,7 @@ fun HelpDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("Ajuda") },
         text = {
-            Column {
-                Text("Como usar o FamTrack:", fontWeight = FontWeight.Medium)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("1. Crie uma conta ou faca login", style = MaterialTheme.typography.bodySmall)
-                Text("2. Crie ou entre em uma familia", style = MaterialTheme.typography.bodySmall)
-                Text("3. Compartilhe o codigo da familia com seus familiares", style = MaterialTheme.typography.bodySmall)
-                Text("4. Todos aparecerao no mapa em tempo real", style = MaterialTheme.typography.bodySmall)
-                Spacer(modifier = Modifier.height(12.dp))
-                Text("SOS:", fontWeight = FontWeight.Medium)
-                Text("Clique no botao SOS para enviar um alerta com sua localizacao para todos os membros.", style = MaterialTheme.typography.bodySmall)
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Geofences:", fontWeight = FontWeight.Medium)
-                Text("Crie areas protegidas. O app avisa quando alguem entrar ou sair dessas areas.", style = MaterialTheme.typography.bodySmall)
-            }
+            Text("Em breve: central de ajuda.")
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Fechar") }

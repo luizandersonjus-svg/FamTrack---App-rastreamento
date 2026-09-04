@@ -172,7 +172,15 @@ fun GeofenceScreen(
                         ) {
                             Icon(Icons.Default.GroupAdd, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Entrar em Familia")
+                                                       Text("Entrar em Familia")
+                        }
+                        if (errorMessage != null) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = errorMessage ?: "",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
                         }
                     }
                 }
@@ -296,8 +304,7 @@ fun GeofenceScreen(
                         val user = SupabaseClient.getInstance().auth.currentUserOrNull()
                         if (user != null) {
                             val family = familyRepository.createFamily(
-                                name = familyName,
-                                creatorId = user.id
+                                name = familyName
                             )
                             familyId = family.id
                             hasFamily = true
@@ -328,7 +335,7 @@ fun GeofenceScreen(
                     try {
                         val user = SupabaseClient.getInstance().auth.currentUserOrNull()
                         if (user != null) {
-                            val family = familyRepository.joinFamilyByCode(inviteCode, user.id)
+                            val family = familyRepository.joinFamilyByCode(inviteCode)
                             familyId = family.id
                             hasFamily = true
                             showJoinFamilyDialog = false

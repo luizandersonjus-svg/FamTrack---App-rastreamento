@@ -5,6 +5,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.os.IBinder
 import android.os.Looper
@@ -45,6 +49,58 @@ class LocationService : Service() {
     // Cache local de geofences (evita fetch a cada atualização)
     private var cachedGeofences: List<Geofence> = emptyList()
 
+    // Última localização conhecida (usada pelo sensor de passos)
+    private var lastKnownLocation: Location? = null
+
+    // Sensor de passos (STEP_COUNTER)
+    private var sensorManager: SensorManager? = null
+    private var stepSensor: Sensor? = null
+    private var lastStepCount: Long = 0L
+    private var stepCountInitialized = false
+
+    private val stepListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
+            val total = event.values[0].toLong()
+            if (!stepCountInitialized) {
+                stepCountInitialized = true
+                lastStepCount = total
+                return
+            }
+            val delta = (total - lastStepCount).coerceAtLeast(0L)
+            lastStepCount = total
+            if (delta == 0L) return
+
+            // Acumula passos apenas se a última posição estiver dentro de um local conhecido
+            val location = lastKnownLocation ?: return
+            val insidePlace = cachedGeofences
+                .filter { it.active }
+                .firstOrNull { gf ->
+                    val dist = FloatArray(1)
+                    Location.distanceBetween(
+                        location.latitude,
+                        location.longitude,
+                        gf.center_lat,
+                        gf.center_lon,
+                        dist
+                    )
+                    dist[0] <= gf.radius_meters
+                }
+            if (insidePlace != null) {
+                if (currentPlaceName != insidePlace.name) {
+                    currentPlaceName = insidePlace.name
+                    currentPlaceSteps = 0
+                }
+                currentPlaceSteps += delta.toInt()
+            } else {
+                currentPlaceName = null
+                currentPlaceSteps = 0
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
+
     override fun onCreate() {
         super.onCreate()
         locationClient = LocationServices.getFusedLocationProviderClient(this)
@@ -72,9 +128,11 @@ class LocationService : Service() {
         refreshGeofenceCache()
         startGeofenceCacheRefreshLoop()
         startLocationUpdates()
+        registerStepSensor()
     }
 
     private fun stop() {
+        unregisterStepSensor()
         @Suppress("DEPRECATION")
         stopForeground(true)
         stopSelf()
@@ -93,6 +151,7 @@ class LocationService : Service() {
         val locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
+                    lastKnownLocation = location
                     sendLocationToSupabase(location)
                     saveRoutePoint(location)
                     checkGeofences(location)
@@ -197,13 +256,13 @@ class LocationService : Service() {
                     val wasInside = isUserInsideGeofence(userId, geofence.id!!)
 
                     if (!wasInside && isInside) {
-                        val title = "Entrou na area"
-                        val message = "Voce entrou em: ${geofence.name}"
+                        val title = geofence.name
+                        val message = "Chegou em: ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode())
                         insertGeofenceNotification(familyId, userId, title, message)
                     } else if (wasInside && !isInside) {
-                        val title = "Saiu da area"
-                        val message = "Voce saiu de: ${geofence.name}"
+                        val title = geofence.name
+                        val message = "Saiu de: ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode() + 1)
                         insertGeofenceNotification(familyId, userId, title, message)
                     }
@@ -274,6 +333,41 @@ class LocationService : Service() {
         } catch (_: SecurityException) { }
     }
 
+    private fun registerStepSensor() {
+        try {
+            // Android 10+ exige esta permissão para ler o sensor de passos
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.ACTIVITY_RECOGNITION
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+            stepSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+            stepSensor?.let { sensor ->
+                sensorManager?.registerListener(stepListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun unregisterStepSensor() {
+        try {
+            if (stepSensor != null && sensorManager != null) {
+                sensorManager?.unregisterListener(stepListener)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        stepSensor = null
+        currentPlaceName = null
+        currentPlaceSteps = 0
+        stepCountInitialized = false
+    }
+
     private fun createNotification(): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -293,6 +387,7 @@ class LocationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterStepSensor()
         serviceScope.cancel()
     }
 
@@ -301,6 +396,13 @@ class LocationService : Service() {
         const val ACTION_STOP = "ACTION_STOP"
         const val EXTRA_FAMILY_ID = "EXTRA_FAMILY_ID"
         const val EXTRA_USER_ID = "EXTRA_USER_ID"
+
+        // Passos acumulados no local atual (lidos pela tela do próprio usuário)
+        @Volatile
+        var currentPlaceName: String? = null
+
+        @Volatile
+        var currentPlaceSteps: Int = 0
 
         private const val NOTIFICATION_ID = 1
         private const val UPDATE_INTERVAL_MS = 10000L
