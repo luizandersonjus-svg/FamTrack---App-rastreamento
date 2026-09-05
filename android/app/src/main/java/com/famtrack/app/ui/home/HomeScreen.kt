@@ -175,7 +175,7 @@ fun HomeScreen(
     LaunchedEffect(familyId) {
         val fid = familyId ?: return@LaunchedEffect
         while (true) {
-            kotlinx.coroutines.delay(10_000)
+            kotlinx.coroutines.delay(3_000)
             try {
                 familyLocations = locationRepository.getFamilyLocations(fid)
                 activeSosAlerts = sosRepository.getActiveSosAlerts(fid)
@@ -196,7 +196,7 @@ fun HomeScreen(
                 val bmp = try {
                     java.net.URL(url).openStream().use { stream ->
                         android.graphics.BitmapFactory.decodeStream(stream)?.let {
-                            android.graphics.Bitmap.createScaledBitmap(it, 120, 120, true)
+                            circularAvatarBitmap(android.graphics.Bitmap.createScaledBitmap(it, 120, 120, true))
                         }
                     }
                 } catch (e: Exception) {
@@ -437,13 +437,14 @@ fun HomeScreen(
                 familyLocations.forEach { location ->
                     val info = memberInfos[location.user_id]
                     val avatar = memberAvatars[location.user_id]
+                    val isSelf = location.user_id == userId
+                    val live = if (isSelf) currentLocation else null
+                    val pos = com.google.android.gms.maps.model.LatLng(
+                        live?.first ?: location.latitude,
+                        live?.second ?: location.longitude
+                    )
                     Marker(
-                        state = MarkerState(
-                            position = com.google.android.gms.maps.model.LatLng(
-                                location.latitude,
-                                location.longitude
-                            )
-                        ),
+                        state = MarkerState(position = pos),
                         title = info?.display_name ?: "Membro",
                         icon = if (avatar != null) {
                             com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(avatar)
@@ -451,6 +452,11 @@ fun HomeScreen(
                             com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
                                 com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_AZURE
                             )
+                        },
+                        anchor = if (avatar != null) {
+                            androidx.compose.ui.geometry.Offset(0.5f, 0.5f)
+                        } else {
+                            androidx.compose.ui.geometry.Offset(0.5f, 1f)
                         }
                     )
                 }
@@ -626,7 +632,7 @@ private fun startLocationUpdates(
 
     val locationRequest = LocationRequest.Builder(
         Priority.PRIORITY_HIGH_ACCURACY,
-        5000L
+        3000L
     ).apply {
         setMinUpdateDistanceMeters(5f)
         setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
@@ -785,4 +791,26 @@ fun CreatePlaceDialog(
             }
         }
     )
+}
+
+private fun circularAvatarBitmap(source: android.graphics.Bitmap): android.graphics.Bitmap {
+    val size = minOf(source.width, source.height)
+    val out = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(out)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    val bounds = android.graphics.RectF(0f, 0f, size.toFloat(), size.toFloat())
+    val path = android.graphics.Path().apply {
+        addOval(bounds, android.graphics.Path.Direction.CW)
+    }
+    canvas.save()
+    canvas.clipPath(path)
+    canvas.drawBitmap(source, null, android.graphics.Rect(0, 0, size, size), paint)
+    canvas.restore()
+    val border = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        color = android.graphics.Color.WHITE
+        strokeWidth = (size * 0.06f).coerceAtLeast(2f)
+    }
+    canvas.drawOval(bounds, border)
+    return out
 }

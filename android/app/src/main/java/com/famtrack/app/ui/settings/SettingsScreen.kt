@@ -1,5 +1,6 @@
 package com.famtrack.app.ui.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -23,8 +24,13 @@ import android.widget.Toast
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.HeartRateRecord
 import coil.compose.AsyncImage
 import com.famtrack.app.data.remote.FamilyRepository
+import com.famtrack.app.data.remote.HealthConnectRepository
+import com.famtrack.app.data.remote.HeartRateSummary
 import com.famtrack.app.data.remote.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
@@ -657,97 +663,152 @@ fun SettingsSwitchItem(
     }
 }
 
-data class DeviceItem(
-    val name: String,
-    val online: Boolean
-)
-
 @Composable
 fun DevicesDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
-    var devices by remember {
-        mutableStateOf(
-            listOf(
-                DeviceItem("Smartwatch Android", true),
-                DeviceItem("Galaxy Watch 6", false),
-                DeviceItem("Mi Band 7", true)
-            )
-        )
+    val scope = rememberCoroutineScope()
+    val repo = remember { HealthConnectRepository(context) }
+
+    var sdkAvailable by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(true) }
+    var hasPermission by remember { mutableStateOf(false) }
+    var reading by remember { mutableStateOf(false) }
+    var summary by remember { mutableStateOf<HeartRateSummary?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+
+    fun load() {
+        scope.launch {
+            checking = true
+            reading = false
+            summary = null
+            message = null
+            try {
+                sdkAvailable = repo.isAvailable()
+                if (sdkAvailable) {
+                    hasPermission = repo.hasHeartRatePermission()
+                    if (hasPermission) {
+                        reading = true
+                        summary = repo.readTodayHeartRate()
+                        reading = false
+                        if (summary == null) {
+                            message = "Sem registros de batimentos hoje. Conecte um relogio/banda que grave batimentos (ex.: Samsung Health, Mi Fitness, Google Fit), sincronize com o Health Connect e toque em Atualizar."
+                        }
+                    }
+                } else {
+                    message = "O app Health Connect do Google nao esta instalado/atualizado neste aparelho. Instale-o para poder ler os batimentos do relogio/banda."
+                }
+            } catch (e: Exception) {
+                message = "Erro ao consultar o Health Connect."
+            } finally {
+                checking = false
+            }
+        }
     }
-    var dropdownFor by remember { mutableStateOf<String?>(null) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        hasPermission = granted.contains(
+            HealthPermission.getReadPermission(HeartRateRecord::class)
+        )
+        if (hasPermission) {
+            load()
+        } else {
+            message = "Acesso aos batimentos negado. Permita no Health Connect e toque em Atualizar."
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Dispositivos conectados") },
+        title = { Text("Dispositivos e saude") },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState())
-            ) {
-                if (devices.isEmpty()) {
-                    Text(
-                        text = "Nenhum dispositivo conectado.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                devices.forEach { device ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Watch,
-                            contentDescription = null,
-                            tint = if (device.online) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            }
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    text = "Os batimentos vem do Health Connect (Google), que recebe os dados do relogio ou banda que voce conectar.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                when {
+                    checking -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(32.dp),
+                            strokeWidth = 3.dp
                         )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = device.name,
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                text = if (device.online) "Online" else "Offline",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (device.online) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    !sdkAvailable -> {
+                        Text(message ?: "Health Connect indisponivel.")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = {
+                            try {
+                                context.startActivity(
+                                    android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata")
+                                    )
+                                )
+                            } catch (e: Exception) {
+                                try {
+                                    context.startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata")
+                                        )
+                                    )
+                                } catch (e2: Exception) {
+                                    // nada
                                 }
-                            )
-                        }
-                        Box {
-                            IconButton(onClick = { dropdownFor = device.name }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "Opcoes")
                             }
-                            DropdownMenu(
-                                expanded = dropdownFor == device.name,
-                                onDismissRequest = { dropdownFor = null }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Informacoes") },
-                                    onClick = {
-                                        dropdownFor = null
-                                        Toast.makeText(context, device.name, Toast.LENGTH_SHORT).show()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Remover") },
-                                    onClick = {
-                                        dropdownFor = null
-                                        devices = devices.filterNot { it.name == device.name }
-                                    }
-                                )
-                            }
+                        }) {
+                            Text("Abrir loja para instalar")
                         }
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    !hasPermission -> {
+                        Text("Para ler os batimentos, o FamTrack precisa da sua permissao.")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = {
+                            permissionLauncher.launch(
+                                setOf(HealthPermission.getReadPermission(HeartRateRecord::class))
+                            )
+                        }) {
+                            Text("Permitir acesso aos batimentos")
+                        }
+                    }
+                    reading -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(32.dp),
+                            strokeWidth = 3.dp
+                        )
+                    }
+                    summary != null -> {
+                        Text(
+                            "Batimentos de hoje",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Media: ${summary!!.media} bpm")
+                        Text("Minimo: ${summary!!.min} bpm")
+                        Text("Maximo: ${summary!!.max} bpm")
+                        Text(
+                            "(${summary!!.amostras} leituras)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    else -> {
+                        Text(message ?: "Sem dados disponiveis.")
+                    }
+                }
+                if (!checking && summary != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    TextButton(onClick = { load() }) { Text("Atualizar") }
+                }
+                if (!checking && message != null && sdkAvailable) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    TextButton(onClick = { load() }) { Text("Atualizar") }
                 }
             }
         },

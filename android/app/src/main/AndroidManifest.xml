@@ -20,6 +20,13 @@
     <!-- Internet (para Supabase) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Health Connect (batimentos do relogio/banda) -->
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
     <application
         android:name=".FamTrackApp"
         android:allowBackup="true"

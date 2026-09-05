@@ -405,8 +405,8 @@ class LocationService : Service() {
         var currentPlaceSteps: Int = 0
 
         private const val NOTIFICATION_ID = 1
-        private const val UPDATE_INTERVAL_MS = 10000L
-        private const val MIN_DISTANCE_METERS = 10f
+        private const val UPDATE_INTERVAL_MS = 3000L
+        private const val MIN_DISTANCE_METERS = 5f
         private const val GEOFENCE_CACHE_REFRESH_MS = 60000L
 
         fun startService(

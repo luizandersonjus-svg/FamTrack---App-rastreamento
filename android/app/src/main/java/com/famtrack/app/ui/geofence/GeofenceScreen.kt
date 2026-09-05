@@ -25,6 +25,14 @@ import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.service.GeofenceWorker
 import com.famtrack.app.service.LocationService
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapType
+import com.google.maps.android.compose.Marker
+import com.google.maps.android.compose.MarkerState
+import com.google.maps.android.compose.rememberCameraPositionState
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -428,10 +436,41 @@ fun CreateGeofenceDialog(
     onDismiss: () -> Unit,
     onCreate: (String, Double, Double, Double) -> Unit
 ) {
+    val context = LocalContext.current
     var name by remember { mutableStateOf("") }
-    var latitude by remember { mutableStateOf("") }
-    var longitude by remember { mutableStateOf("") }
     var radius by remember { mutableStateOf("100") }
+    var markerLatLng by remember {
+        mutableStateOf(com.google.android.gms.maps.model.LatLng(-14.0, -51.0))
+    }
+    val cameraPositionState = rememberCameraPositionState()
+
+    // Tenta começar o pino na localizacao atual do aparelho
+    LaunchedEffect(Unit) {
+        try {
+            val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                com.google.android.gms.location.LocationServices
+                    .getFusedLocationProviderClient(context)
+                    .lastLocation
+                    .addOnSuccessListener { location ->
+                        if (location != null) {
+                            val latLng = com.google.android.gms.maps.model.LatLng(
+                                location.latitude,
+                                location.longitude
+                            )
+                            markerLatLng = latLng
+                            cameraPositionState.position =
+                                com.google.android.gms.maps.model.CameraPosition.fromLatLngZoom(latLng, 16f)
+                        }
+                    }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -441,22 +480,37 @@ fun CreateGeofenceDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Nome") },
+                    label = { Text("Nome do local") },
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = latitude,
-                    onValueChange = { latitude = it },
-                    label = { Text("Latitude") },
-                    modifier = Modifier.fillMaxWidth()
+                Text(
+                    text = "Toque no mapa para posicionar o pino no local (use os dedos para mover/zoom).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = longitude,
-                    onValueChange = { longitude = it },
-                    label = { Text("Longitude") },
-                    modifier = Modifier.fillMaxWidth()
+                GoogleMap(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(260.dp),
+                    cameraPositionState = cameraPositionState,
+                    properties = MapProperties(mapType = MapType.NORMAL),
+                    onMapClick = { latLng -> markerLatLng = latLng },
+                    onMapLongClick = { latLng -> markerLatLng = latLng }
+                ) {
+                    Marker(
+                        state = remember(markerLatLng) {
+                            MarkerState(position = markerLatLng)
+                        },
+                        title = "Local escolhido"
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Posicao: ${"%.5f".format(markerLatLng.latitude)}, ${"%.5f".format(markerLatLng.longitude)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
@@ -470,12 +524,10 @@ fun CreateGeofenceDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val lat = latitude.toDoubleOrNull() ?: return@TextButton
-                    val lon = longitude.toDoubleOrNull() ?: return@TextButton
                     val r = radius.toDoubleOrNull() ?: 100.0
-                    onCreate(name, lat, lon, r)
+                    onCreate(name, markerLatLng.latitude, markerLatLng.longitude, r)
                 },
-                enabled = name.isNotBlank() && latitude.isNotBlank() && longitude.isNotBlank()
+                enabled = name.isNotBlank()
             ) {
                 Text("Criar")
             }
