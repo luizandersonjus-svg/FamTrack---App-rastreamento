@@ -12,6 +12,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,10 +29,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.famtrack.app.R
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.Location as FamLocation
 import com.famtrack.app.data.remote.FamilyMemberDisplay
@@ -39,6 +43,24 @@ import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
 import com.famtrack.app.data.remote.SosRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.activity.ActivityRepository
+import com.famtrack.app.feature.activity.Event
+import com.famtrack.app.feature.memberdetail.MemberCard
+import com.famtrack.app.feature.memberdetail.MemberCardInfo
+import com.famtrack.app.feature.memberdetail.MemberDetailBottomSheet
+import com.famtrack.app.feature.memberdetail.resolveStatusText
+import com.famtrack.app.feature.onboarding.OnboardingPrefs
+import com.famtrack.app.feature.onboarding.OnboardingScreen
+import com.famtrack.app.feature.places.Place
+import com.famtrack.app.feature.places.PlacesMapOverlay
+import com.famtrack.app.feature.places.PlacesRepository
+import com.famtrack.app.feature.privacy.MemberFlags
+import com.famtrack.app.feature.privacy.PrivacyRepository
+import com.famtrack.app.feature.sos.AlertNotifier
+import com.famtrack.app.feature.sos.CheckInRepository
+import com.famtrack.app.feature.sos.RealtimeAlertListener
+import com.famtrack.app.feature.sos.SosButton
+import com.famtrack.app.feature.sos.SosConfirmationDialog
 import com.famtrack.app.service.LocationService
 import io.github.jan.supabase.auth.auth
 import com.google.android.gms.location.*
@@ -55,6 +77,11 @@ fun HomeScreen(
     onNavigateToHistory: () -> Unit,
     onNavigateToNotifications: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToPlaces: () -> Unit,
+    onNavigateToActivity: () -> Unit,
+    onNavigateToInvite: () -> Unit,
+    onNavigateToPrivacy: () -> Unit,
+    onNavigateToMemberHistory: (String) -> Unit,
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
@@ -87,6 +114,25 @@ fun HomeScreen(
     var showCreatePlaceDialog by remember { mutableStateOf(false) }
     var showSosConfirm by remember { mutableStateOf(false) }
     var sosMessage by remember { mutableStateOf<String?>(null) }
+    var places by remember { mutableStateOf<List<Place>>(emptyList()) }
+    var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
+    var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
+    var checkoutBusy by remember { mutableStateOf(false) }
+    var onboardingPending by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        onboardingPending = !OnboardingPrefs.isDone(context)
+    }
+
+    if (onboardingPending) {
+        OnboardingScreen(
+            onFinished = {
+                scope.launch { onboardingPending = false }
+            }
+        )
+        return
+    }
 
     val tabs = listOf("Mapa", "Historico", "Alertas", "Config")
 
@@ -143,6 +189,18 @@ fun HomeScreen(
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
+                    // Carrega locais salvos e flags de privacidade (F3/F7)
+                    try {
+                        places = PlacesRepository().getFamilyPlaces(member.family_id)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    try {
+                        flagByMember = PrivacyRepository().getMemberFlags(member.family_id)
+                            .associateBy { it.user_id }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                     // Carrega alertas SOS ativos da família
                     try {
                         activeSosAlerts = sosRepository.getActiveSosAlerts(member.family_id)
@@ -180,6 +238,9 @@ fun HomeScreen(
                 familyLocations = locationRepository.getFamilyLocations(fid)
                 activeSosAlerts = sosRepository.getActiveSosAlerts(fid)
                 geofences = geofenceRepository.getFamilyGeofences(fid)
+                places = PlacesRepository().getFamilyPlaces(fid)
+                flagByMember = PrivacyRepository().getMemberFlags(fid)
+                    .associateBy { it.user_id }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -218,34 +279,104 @@ fun HomeScreen(
         }
     }
 
-    if (showSosConfirm) {
-        AlertDialog(
-            onDismissRequest = { showSosConfirm = false },
-            title = { Text("Acionar SOS?") },
-            text = { Text("Todos os membros da familia receberao um alerta com sua localizacao.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showSosConfirm = false
-                    scope.launch {
-                        try {
-                            val fId = familyId ?: return@launch
-                            val uId = userId ?: return@launch
-                            val (lat, lon) = currentLocation ?: return@launch
-                            sosRepository.triggerSos(fId, uId, lat, lon)
-                            sosMessage = "SOS acionado com sucesso!"
-                        } catch (e: Exception) {
-                            sosMessage = "Erro ao acionar SOS"
-                        }
-                    }
-                }) {
-                    Text("Sim, acionar")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSosConfirm = false }) {
-                    Text("Cancelar")
+    // Status humano (local/endereço) de cada membro para os cards (F2)
+    LaunchedEffect(familyLocations, places) {
+        val currentPlaces = places
+        val statuses = mutableMapOf<String, String>()
+        familyLocations.forEach { loc ->
+            try {
+                statuses[loc.user_id] = resolveStatusText(
+                    context,
+                    loc.latitude,
+                    loc.longitude,
+                    currentPlaces
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        memberStatuses = statuses
+    }
+
+    // Registra bateria fraca (<20%) uma vez por dia por membro (F6)
+    LaunchedEffect(familyLocations) {
+        val fid = familyId ?: return@LaunchedEffect
+        val today = java.time.LocalDate.now().toString()
+        val prefs = context.getSharedPreferences("low_battery_log", Context.MODE_PRIVATE)
+        familyLocations.forEach { loc ->
+            val level = loc.batteryLevel
+            if (level != null && level < 20) {
+                val key = "${loc.user_id}_$today"
+                if (!prefs.getBoolean(key, false)) {
+                    ActivityRepository().recordEvent(
+                        Event(
+                            family_id = fid,
+                            type = "LOW_BATTERY",
+                            member_id = loc.user_id,
+                            lat = loc.latitude,
+                            lng = loc.longitude
+                        )
+                    )
+                    prefs.edit().putBoolean(key, true).apply()
                 }
             }
+        }
+    }
+
+    // Notificação em tempo real de SOS dos outros membros (F5, sem FCM)
+    LaunchedEffect(familyId, userId) {
+        val fid = familyId ?: return@LaunchedEffect
+        val uid = userId ?: return@LaunchedEffect
+        try {
+            RealtimeAlertListener.collectSosAlerts(
+                SupabaseClient.getInstance(),
+                fid,
+                uid
+            ) { alert ->
+                AlertNotifier.showSosNotification(
+                    context,
+                    memberInfos[alert.user_id]?.display_name
+                        ?: context.getString(R.string.sos_notif_fallback),
+                    alert.latitude,
+                    alert.longitude
+                )
+                activeSosAlerts = listOf(alert) + activeSosAlerts.filter { it.id != alert.id }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    if (showSosConfirm) {
+        SosConfirmationDialog(
+            onConfirm = {
+                showSosConfirm = false
+                scope.launch {
+                    val fId = familyId ?: return@launch
+                    val uId = userId ?: return@launch
+                    val (lat, lon) = currentLocation ?: run {
+                        sosMessage = context.getString(R.string.sos_no_location)
+                        return@launch
+                    }
+                    try {
+                        sosRepository.triggerSos(fId, uId, lat, lon)
+                        ActivityRepository().recordEvent(
+                            Event(
+                                family_id = fId,
+                                type = "SOS",
+                                member_id = uId,
+                                lat = lat,
+                                lng = lon
+                            )
+                        )
+                        sosMessage = context.getString(R.string.sos_sent)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        sosMessage = context.getString(R.string.sos_send_fail)
+                    }
+                }
+            },
+            onDismiss = { showSosConfirm = false }
         )
     }
 
@@ -285,6 +416,34 @@ fun HomeScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 actions = {
+                    IconButton(onClick = onNavigateToPlaces) {
+                        Icon(
+                            Icons.Filled.Place,
+                            contentDescription = stringResource(R.string.home_action_places),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onNavigateToActivity) {
+                        Icon(
+                            Icons.Filled.Timeline,
+                            contentDescription = stringResource(R.string.home_action_activity),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onNavigateToInvite) {
+                        Icon(
+                            Icons.Filled.GroupAdd,
+                            contentDescription = stringResource(R.string.home_action_invite),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onNavigateToPrivacy) {
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = stringResource(R.string.home_action_privacy),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     IconButton(onClick = {
                         scope.launch {
                             SupabaseClient.getInstance().auth.signOut()
@@ -293,7 +452,7 @@ fun HomeScreen(
                     }) {
                         Icon(
                             Icons.Default.Logout,
-                            contentDescription = "Sair",
+                            contentDescription = stringResource(R.string.logout),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -392,6 +551,33 @@ fun HomeScreen(
                     Icon(
                         Icons.Default.AddLocation,
                         contentDescription = "Cadastrar local",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                FloatingActionButton(
+                    onClick = {
+                        if (!checkoutBusy) {
+                            scope.launch {
+                                checkoutBusy = true
+                                val ok = CheckInRepository().checkIn(context)
+                                sosMessage = if (ok) {
+                                    context.getString(R.string.checkin_done)
+                                } else {
+                                    context.getString(R.string.checkin_fail)
+                                }
+                                checkoutBusy = false
+                            }
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    shape = CircleShape,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = stringResource(R.string.checkin_cd),
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -497,6 +683,7 @@ fun HomeScreen(
                         title = geofence.name
                     )
                 }
+                PlacesMapOverlay(places)
             }
 
             if (currentLocation == null) {
@@ -590,6 +777,44 @@ fun HomeScreen(
                 }
             }
 
+            // Cards dos membros (F2/F3/F7) no rodapé do mapa
+            if (familyLocations.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 92.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(familyLocations, key = { it.user_id }) { loc ->
+                        val info = memberInfos[loc.user_id]
+                        MemberCard(
+                            info = MemberCardInfo(
+                                memberId = loc.user_id,
+                                displayName = info?.display_name ?: "Membro",
+                                avatarUrl = info?.avatar_url,
+                                statusText = memberStatuses[loc.user_id] ?: "",
+                                batteryLevel = loc.batteryLevel,
+                                lastUpdatedMillis = loc.lastUpdatedAt,
+                                sharingPaused = flagByMember[loc.user_id]?.sharing_paused == true
+                            ),
+                            onClick = { selectedMember = loc },
+                            modifier = Modifier.width(240.dp)
+                        )
+                    }
+                }
+            }
+
+            // Botão de SOS com pressionar e segurar (F5)
+            SosButton(
+                onTrigger = { showSosConfirm = true },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 80.dp)
+                    .padding(bottom = 8.dp)
+            )
+
             sosMessage?.let { msg ->
                 LaunchedEffect(msg) {
                     kotlinx.coroutines.delay(3000)
@@ -605,6 +830,24 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    selectedMember?.let { member ->
+        val info = memberInfos[member.user_id]
+        MemberDetailBottomSheet(
+            member = member,
+            displayName = info?.display_name ?: "Membro",
+            avatarUrl = info?.avatar_url,
+            places = places,
+            memberFlags = flagByMember[member.user_id],
+            familyId = familyId ?: "",
+            isSelf = member.user_id == userId,
+            onDismiss = { selectedMember = null },
+            onNavigateToHistory = { uid ->
+                selectedMember = null
+                onNavigateToMemberHistory(uid)
+            }
+        )
     }
 }
 

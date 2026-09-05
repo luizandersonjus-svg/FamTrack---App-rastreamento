@@ -16,6 +16,8 @@ import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
 import com.famtrack.app.data.remote.NotificationRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.activity.ActivityRepository
+import com.famtrack.app.feature.activity.Event
 import io.github.jan.supabase.auth.auth
 
 class GeofenceWorker(
@@ -27,6 +29,7 @@ class GeofenceWorker(
     private val locationRepository = LocationRepository()
     private val familyRepository = FamilyRepository()
     private val notificationRepository = NotificationRepository()
+    private val activityRepository = ActivityRepository()
 
     override suspend fun doWork(): Result {
         return try {
@@ -78,11 +81,13 @@ class GeofenceWorker(
                         val message = "$memberName chegou em ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode())
                         insertGeofenceNotification(user.id, familyId, title, message)
+                        recordEvent(familyId, userId, "ENTER", geofence.id, latestLocation)
                     } else if (wasInside && !isInside) {
                         val title = geofence.name
                         val message = "$memberName saiu de ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode() + 1)
                         insertGeofenceNotification(user.id, familyId, title, message)
+                        recordEvent(familyId, userId, "EXIT", geofence.id, latestLocation)
                     }
 
                     updateGeofenceState(userId, geofence.id, isInside)
@@ -125,6 +130,29 @@ class GeofenceWorker(
     private fun updateGeofenceState(userId: String, geofenceId: String, inside: Boolean) {
         val prefs = applicationContext.getSharedPreferences("geofence_state", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("${userId}_${geofenceId}", inside).apply()
+    }
+
+    private suspend fun recordEvent(
+        familyId: String,
+        memberId: String,
+        type: String,
+        placeId: String?,
+        location: com.famtrack.app.data.model.Location
+    ) {
+        try {
+            activityRepository.recordEvent(
+                Event(
+                    family_id = familyId,
+                    type = type,
+                    member_id = memberId,
+                    place_id = placeId,
+                    lat = location.latitude,
+                    lng = location.longitude
+                )
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun sendGeofenceNotification(title: String, message: String, notificationId: Int) {

@@ -205,7 +205,7 @@ fun HistoryScreen(
                         if (orderedPoints.size >= 2) {
                             Polyline(
                                 points = orderedPoints.map { LatLng(it.latitude, it.longitude) },
-                                color = Color(0xFF1E88E5),
+                                color = MaterialTheme.colorScheme.primary,
                                 width = 6f
                             )
                         }

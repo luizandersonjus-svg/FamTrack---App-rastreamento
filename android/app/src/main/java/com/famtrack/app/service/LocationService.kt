@@ -173,11 +173,15 @@ class LocationService : Service() {
     }
 
     private fun sendLocationToSupabase(location: Location) {
+        if (isSharingPaused()) return
+
         val familyId = currentFamilyId ?: return
         val userId = currentUserId ?: return
 
         serviceScope.launch {
             try {
+                val batteryLevel = (getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager)
+                    ?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
                 val famLocation = com.famtrack.app.data.model.Location(
                     family_id = familyId,
                     user_id = userId,
@@ -185,7 +189,9 @@ class LocationService : Service() {
                     longitude = location.longitude,
                     accuracy = location.accuracy.toDouble(),
                     speed = location.speed.toDouble(),
-                    bearing = location.bearing.toDouble()
+                    bearing = location.bearing.toDouble(),
+                    batteryLevel = batteryLevel,
+                    lastUpdatedAt = System.currentTimeMillis()
                 )
                 // Upsert: mantém apenas a localização mais recente por (family_id, user_id)
                 locationRepository.upsertLocation(famLocation)
@@ -193,6 +199,12 @@ class LocationService : Service() {
                 e.printStackTrace()
             }
         }
+    }
+
+    // F7: guarda única no ponto de envio — lê a preferência persistida pela tela de Privacidade
+    private fun isSharingPaused(): Boolean {
+        return getSharedPreferences("privacy_prefs", MODE_PRIVATE)
+            .getBoolean("sharing_paused", false)
     }
 
     private fun saveRoutePoint(location: Location) {

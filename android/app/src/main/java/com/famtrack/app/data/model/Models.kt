@@ -7,7 +7,8 @@ data class User(
     val id: String,
     val email: String? = null,
     val name: String? = null,
-    val avatarUrl: String? = null
+    val avatarUrl: String? = null,
+    val phone: String? = null
 )
 
 @Serializable
@@ -43,6 +44,8 @@ data class Location(
     val accuracy: Double? = null,
     val speed: Double? = null,
     val bearing: Double? = null,
+    val batteryLevel: Int? = null,
+    val lastUpdatedAt: Long? = null,
     val created_at: String? = null,
     // Dados do usuário (join)
     val user: User? = null

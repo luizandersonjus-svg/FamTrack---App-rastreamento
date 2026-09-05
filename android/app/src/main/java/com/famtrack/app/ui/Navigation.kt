@@ -1,9 +1,17 @@
 package com.famtrack.app.ui
 
 import androidx.compose.runtime.Composable
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.famtrack.app.feature.activity.ActivityScreen
+import com.famtrack.app.feature.invite.InviteScreen
+import com.famtrack.app.feature.invite.JoinScreen
+import com.famtrack.app.feature.places.PlaceEditScreen
+import com.famtrack.app.feature.places.PlacesScreen
+import com.famtrack.app.feature.privacy.PrivacyScreen
 import com.famtrack.app.ui.auth.LoginScreen
 import com.famtrack.app.ui.auth.RegisterScreen
 import com.famtrack.app.ui.home.HomeScreen
@@ -46,6 +54,19 @@ fun FamTrackNavigation() {
             )
         }
 
+        composable("joinFamily") {
+            JoinScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onJoined = {
+                    navController.navigate("home") {
+                        popUpTo("login") { inclusive = true }
+                    }
+                }
+            )
+        }
+
         composable("home") {
             HomeScreen(
                 onNavigateToGeofence = {
@@ -60,10 +81,94 @@ fun FamTrackNavigation() {
                 onNavigateToSettings = {
                     navController.navigate("settings")
                 },
+                onNavigateToPlaces = {
+                    navController.navigate("places")
+                },
+                onNavigateToActivity = {
+                    navController.navigate("activity")
+                },
+                onNavigateToInvite = {
+                    navController.navigate("invite")
+                },
+                onNavigateToPrivacy = {
+                    navController.navigate("privacy")
+                },
+                onNavigateToMemberHistory = { memberId ->
+                    navController.navigate("activity?memberId=$memberId")
+                },
                 onLogout = {
                     navController.navigate("login") {
                         popUpTo(0) { inclusive = true }
                     }
+                }
+            )
+        }
+
+        composable("places") {
+            PlacesScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onNavigateToCreate = {
+                    navController.navigate("placeEdit?placeId=")
+                },
+                onNavigateToEdit = { placeId ->
+                    navController.navigate("placeEdit?placeId=$placeId")
+                }
+            )
+        }
+
+        composable(
+            route = "placeEdit?placeId={placeId}",
+            arguments = listOf(
+                navArgument("placeId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                }
+            )
+        ) {
+            PlaceEditScreen(
+                placeId = it.arguments?.getString("placeId"),
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onSaved = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable("invite") {
+            InviteScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable("privacy") {
+            PrivacyScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(
+            route = "activity?memberId={memberId}",
+            arguments = listOf(
+                navArgument("memberId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                }
+            )
+        ) {
+            val memberId = it.arguments?.getString("memberId")?.takeIf { arg -> arg.isNotBlank() }
+            ActivityScreen(
+                familyId = "",
+                memberId = memberId,
+                onNavigateBack = {
+                    navController.popBackStack()
                 }
             )
         }
