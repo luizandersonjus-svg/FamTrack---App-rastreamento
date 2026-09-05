@@ -77,7 +77,7 @@ fun LoginScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Column(
             modifier = Modifier
@@ -85,7 +85,7 @@ fun LoginScreen(
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(60.dp))
+            Spacer(modifier = Modifier.height(56.dp))
 
             Box(
                 modifier = Modifier
@@ -110,9 +110,9 @@ fun LoginScreen(
 
             Text(
                 text = "FamTrack",
-                style = MaterialTheme.typography.headlineMedium,
+                fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
+                color = MaterialTheme.colorScheme.primary
             )
 
             Text(
@@ -122,139 +122,150 @@ fun LoginScreen(
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
-            OutlinedTextField(
-                value = email,
-                onValueChange = { email = it },
-                label = { Text("Email") },
-                leadingIcon = {
-                    Icon(Icons.Default.Email, contentDescription = null)
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Email,
-                    imeAction = ImeAction.Next
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
                 ),
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Senha") },
-                leadingIcon = {
-                    Icon(Icons.Default.Lock, contentDescription = null)
-                },
-                trailingIcon = {
-                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                        Icon(
-                            if (passwordVisible) Icons.Default.VisibilityOff
-                            else Icons.Default.Visibility,
-                            contentDescription = null
-                        )
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                singleLine = true,
-                visualTransformation = if (passwordVisible) VisualTransformation.None
-                    else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done
-                ),
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            if (errorMessage != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(
-                        text = errorMessage!!,
-                        modifier = Modifier.padding(12.dp),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            ) {
+                Column(modifier = Modifier.padding(24.dp)) {
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("Email") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Email, contentDescription = null)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp)),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Email,
+                            imeAction = ImeAction.Next
+                        ),
+                        shape = RoundedCornerShape(8.dp)
                     )
-                }
-            }
 
-            Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-            Button(
-                onClick = {
-                    scope.launch {
-                        isLoading = true
-                        errorMessage = null
-                        try {
-                            authRepository.signInWithEmail(email, password)
-                            onLoginSuccess()
-                        } catch (e: Exception) {
-                            val msg = e.message ?: ""
-                            errorMessage = when {
-                                msg.contains("Invalid login credentials") -> "Email ou senha incorretos"
-                                msg.contains("Email not confirmed") -> "Confirme seu email antes de entrar"
-                                msg.contains("network") -> "Sem conexao com a internet"
-                                else -> "Erro ao entrar. Tente novamente."
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("Senha") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Lock, contentDescription = null)
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    if (passwordVisible) Icons.Default.VisibilityOff
+                                    else Icons.Default.Visibility,
+                                    contentDescription = null
+                                )
                             }
-                        } finally {
-                            isLoading = false
-                        }
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape = RoundedCornerShape(12.dp),
-                enabled = !isLoading && email.isNotBlank() && password.isNotBlank()
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp)),
+                        singleLine = true,
+                        visualTransformation = if (passwordVisible) VisualTransformation.None
+                            else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
+                        shape = RoundedCornerShape(8.dp)
                     )
-                } else {
-                    Text("Entrar", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        isLoading = true
-                        errorMessage = null
-                        try {
-                            val url = authRepository.getGoogleOAuthUrl()
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            googleOAuthLauncher.launch(intent)
-                        } catch (e: Exception) {
-                            errorMessage = "Erro ao iniciar Google: ${e.message}"
-                            isLoading = false
+                    if (errorMessage != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = errorMessage!!,
+                                modifier = Modifier.padding(12.dp),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape = RoundedCornerShape(12.dp),
-                enabled = !isLoading
-            ) {
-                Text("Entrar com Google", fontSize = 16.sp)
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                isLoading = true
+                                errorMessage = null
+                                try {
+                                    authRepository.signInWithEmail(email, password)
+                                    onLoginSuccess()
+                                } catch (e: Exception) {
+                                    val msg = e.message ?: ""
+                                    errorMessage = when {
+                                        msg.contains("Invalid login credentials") -> "Email ou senha incorretos"
+                                        msg.contains("Email not confirmed") -> "Confirme seu email antes de entrar"
+                                        msg.contains("network") -> "Sem conexao com a internet"
+                                        else -> "Erro ao entrar. Tente novamente."
+                                    }
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        enabled = !isLoading && email.isNotBlank() && password.isNotBlank()
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Entrar", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                isLoading = true
+                                errorMessage = null
+                                try {
+                                    val url = authRepository.getGoogleOAuthUrl()
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    googleOAuthLauncher.launch(intent)
+                                } catch (e: Exception) {
+                                    errorMessage = "Erro ao iniciar Google: ${e.message}"
+                                    isLoading = false
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        enabled = !isLoading
+                    ) {
+                        Text("Entrar com Google", fontSize = 16.sp)
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.weight(1f))
