@@ -41,6 +41,7 @@ fun SettingsScreen(
     var showPrivacyDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
+    var showDevicesDialog by remember { mutableStateOf(false) }
 
     if (showProfileDialog) {
         ProfileDialog(onDismiss = { showProfileDialog = false })
@@ -56,6 +57,9 @@ fun SettingsScreen(
     }
     if (showHelpDialog) {
         HelpDialog(onDismiss = { showHelpDialog = false })
+    }
+    if (showDevicesDialog) {
+        DevicesDialog(onDismiss = { showDevicesDialog = false })
     }
 
     Scaffold(
@@ -121,6 +125,31 @@ fun SettingsScreen(
                         onClick = { showPrivacyDialog = true }
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "Dispositivos",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                SettingsItem(
+                    icon = Icons.Default.Watch,
+                    title = "Conectar dispositivos",
+                    subtitle = "Parear relogios e wearables usados pela familia",
+                    onClick = { showDevicesDialog = true }
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -626,4 +655,104 @@ fun SettingsSwitchItem(
             onCheckedChange = onCheckedChange
         )
     }
+}
+
+data class DeviceItem(
+    val name: String,
+    val online: Boolean
+)
+
+@Composable
+fun DevicesDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var devices by remember {
+        mutableStateOf(
+            listOf(
+                DeviceItem("Smartwatch Android", true),
+                DeviceItem("Galaxy Watch 6", false),
+                DeviceItem("Mi Band 7", true)
+            )
+        )
+    }
+    var dropdownFor by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Dispositivos conectados") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
+                if (devices.isEmpty()) {
+                    Text(
+                        text = "Nenhum dispositivo conectado.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                devices.forEach { device ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Watch,
+                            contentDescription = null,
+                            tint = if (device.online) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = device.name,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                text = if (device.online) "Online" else "Offline",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (device.online) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                        Box {
+                            IconButton(onClick = { dropdownFor = device.name }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "Opcoes")
+                            }
+                            DropdownMenu(
+                                expanded = dropdownFor == device.name,
+                                onDismissRequest = { dropdownFor = null }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Informacoes") },
+                                    onClick = {
+                                        dropdownFor = null
+                                        Toast.makeText(context, device.name, Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Remover") },
+                                    onClick = {
+                                        dropdownFor = null
+                                        devices = devices.filterNot { it.name == device.name }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Fechar") }
+        }
+    )
 }

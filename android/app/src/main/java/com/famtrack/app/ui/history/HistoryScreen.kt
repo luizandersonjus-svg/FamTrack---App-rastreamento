@@ -1,10 +1,11 @@
 package com.famtrack.app.ui.history
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -12,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.famtrack.app.data.model.FamilyMember
@@ -22,6 +24,9 @@ import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.util.isInsideGeofence
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.*
 import io.github.jan.supabase.auth.auth
 import java.text.SimpleDateFormat
 import java.util.*
@@ -171,76 +176,72 @@ fun HistoryScreen(
                 }
             }
             else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    contentPadding = PaddingValues(16.dp)
-                ) {
-                    item {
-                        DaySummarySection(dayVisits)
+                val cameraPositionState = rememberCameraPositionState()
+                val orderedPoints = routePoints.sortedBy {
+                    parseTimestampMillis(it.recorded_at) ?: Long.MAX_VALUE
+                }
+                // Move a câmera para caber a rota
+                LaunchedEffect(routePoints) {
+                    if (orderedPoints.isNotEmpty()) {
+                        val (clat, clon, zoom) = computeRouteCenterAndZoom(
+                            orderedPoints.map { LatLng(it.latitude, it.longitude) }
+                        )
+                        cameraPositionState.animate(
+                            CameraUpdateFactory.newLatLngZoom(LatLng(clat, clon), zoom),
+                            1000
+                        )
                     }
-                    items(routePoints) { point ->
-                        RoutePointItem(point)
+                }
+                Column(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    GoogleMap(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.55f),
+                        cameraPositionState = cameraPositionState,
+                        properties = MapProperties(mapType = MapType.NORMAL)
+                    ) {
+                        if (orderedPoints.size >= 2) {
+                            Polyline(
+                                points = orderedPoints.map { LatLng(it.latitude, it.longitude) },
+                                color = Color(0xFF1E88E5),
+                                width = 6f
+                            )
+                        }
+                        geofences.forEach { gf ->
+                            val center = LatLng(gf.center_lat, gf.center_lon)
+                            val strokeColor = try {
+                                Color(android.graphics.Color.parseColor(gf.color))
+                            } catch (e: Exception) {
+                                Color.Red
+                            }
+                            Circle(
+                                center = center,
+                                radius = gf.radius_meters,
+                                strokeColor = strokeColor,
+                                fillColor = strokeColor.copy(alpha = 0.25f),
+                                strokeWidth = 3f
+                            )
+                            Marker(
+                                state = MarkerState(position = center),
+                                title = gf.name
+                            )
+                        }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        DaySummarySection(dayVisits)
                     }
                 }
             }
         }
         }
-    }
-}
-
-@Composable
-fun RoutePointItem(point: RoutePoint) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.Place,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Lat: ${point.latitude}, Lon: ${point.longitude}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = formatTimestamp(point.recorded_at),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-private fun formatTimestamp(timestamp: String?): String {
-    if (timestamp == null) return "Data desconhecida"
-    return try {
-        // Remove o sufixo de fuso horário (ex: .123456+00 ou Z) para compatibilidade de parsing
-        val cleaned = timestamp.trim().substringBefore('.')
-        val iso = if (cleaned.endsWith("Z")) cleaned else "$cleaned"
-        val inputFormat = if (cleaned.endsWith("Z")) {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.getDefault()).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
-        } else {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-        }
-        val outputFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-        val date = inputFormat.parse(iso)
-        outputFormat.format(date!!)
-    } catch (e: Exception) {
-        timestamp
     }
 }
 
@@ -324,6 +325,37 @@ private fun parseTimestampMillis(timestamp: String?): Long? {
     } catch (e: Exception) {
         null
     }
+}
+
+/**
+ * Centro e zoom aproximados para caber a rota (com um pouco de margem).
+ */
+private fun computeRouteCenterAndZoom(points: List<LatLng>): Triple<Double, Double, Float> {
+    if (points.isEmpty()) return Triple(0.0, 0.0, 15f)
+    var minLat = points[0].latitude
+    var maxLat = points[0].latitude
+    var minLon = points[0].longitude
+    var maxLon = points[0].longitude
+    points.forEach { p ->
+        minLat = minOf(minLat, p.latitude)
+        maxLat = maxOf(maxLat, p.latitude)
+        minLon = minOf(minLon, p.longitude)
+        maxLon = maxOf(maxLon, p.longitude)
+    }
+    val centerLat = (minLat + maxLat) / 2
+    val centerLon = (minLon + maxLon) / 2
+    val span = maxOf(maxLat - minLat, maxLon - minLon) * 1.4
+    val zoom = when {
+        span <= 0.0015 -> 17f
+        span <= 0.004 -> 16f
+        span <= 0.01 -> 15f
+        span <= 0.025 -> 14f
+        span <= 0.06 -> 13f
+        span <= 0.15 -> 12f
+        span <= 0.35 -> 11f
+        else -> 10f
+    }
+    return Triple(centerLat, centerLon, zoom)
 }
 
 /**

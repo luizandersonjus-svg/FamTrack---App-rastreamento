@@ -5,11 +5,17 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Looper
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -17,6 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -77,6 +84,7 @@ fun HomeScreen(
     var memberAvatars by remember { mutableStateOf<Map<String, android.graphics.Bitmap>>(emptyMap()) }
     var geofences by remember { mutableStateOf<List<Geofence>>(emptyList()) }
     var currentSteps by remember { mutableStateOf<Pair<String?, Int>?>(null) }
+    var showCreatePlaceDialog by remember { mutableStateOf(false) }
     var showSosConfirm by remember { mutableStateOf(false) }
     var sosMessage by remember { mutableStateOf<String?>(null) }
 
@@ -241,6 +249,27 @@ fun HomeScreen(
         )
     }
 
+    val createLat = currentLocation?.first
+    val createLon = currentLocation?.second
+    val createFid = familyId
+    if (showCreatePlaceDialog && createLat != null && createLon != null && createFid != null) {
+        CreatePlaceDialog(
+            familyId = createFid,
+            lat = createLat,
+            lon = createLon,
+            onDismiss = { showCreatePlaceDialog = false },
+            onCreated = {
+                scope.launch {
+                    try {
+                        geofences = geofenceRepository.getFamilyGeofences(createFid)
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -349,6 +378,20 @@ fun HomeScreen(
                     Icon(
                         Icons.Default.LocationOn,
                         contentDescription = "Geofences",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                FloatingActionButton(
+                    onClick = { showCreatePlaceDialog = true },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    shape = CircleShape,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.AddLocation,
+                        contentDescription = "Cadastrar local",
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -609,4 +652,137 @@ private fun startLocationUpdates(
             Looper.getMainLooper()
         )
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CreatePlaceDialog(
+    familyId: String,
+    lat: Double,
+    lon: Double,
+    onDismiss: () -> Unit,
+    onCreated: () -> Unit
+) {
+    val geofenceRepository = remember { GeofenceRepository() }
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var radiusText by remember { mutableStateOf("100") }
+    var colorHex by remember { mutableStateOf("#2E7D32") }
+    var saving by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val canSubmit = name.trim().isNotBlank() && radiusText.toDoubleOrNull() != null && !saving
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text("Cadastrar local") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    text = "O local sera criado na sua posicao atual.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nome do local") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = radiusText,
+                    onValueChange = { radiusText = it },
+                    label = { Text("Raio (metros)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Cor",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val palette = listOf(
+                        "#2E7D32", "#1E88E5", "#F4511E", "#6A1B9A",
+                        "#00897B", "#FDD835", "#C62828", "#37474F"
+                    )
+                    palette.forEach { hex ->
+                        val isSelected = colorHex == hex
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color(android.graphics.Color.parseColor(hex)))
+                                .clickable { colorHex = hex }
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.border(
+                                            3.dp,
+                                            MaterialTheme.colorScheme.onSurface,
+                                            CircleShape
+                                        )
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                        )
+                    }
+                }
+                if (errorMessage != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = errorMessage.orEmpty(),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val radius = radiusText.toDoubleOrNull() ?: return@TextButton
+                    val trimmedName = name.trim()
+                    if (trimmedName.isEmpty()) return@TextButton
+                    saving = true
+                    errorMessage = null
+                    scope.launch {
+                        try {
+                            geofenceRepository.createGeofence(
+                                Geofence(
+                                    family_id = familyId,
+                                    name = trimmedName,
+                                    center_lat = lat,
+                                    center_lon = lon,
+                                    radius_meters = radius,
+                                    color = colorHex
+                                )
+                            )
+                            onCreated()
+                            onDismiss()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            errorMessage = "Erro ao cadastrar o local. Tente novamente."
+                            saving = false
+                        }
+                    }
+                },
+                enabled = canSubmit
+            ) {
+                Text(if (saving) "Salvando..." else "Salvar")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !saving
+            ) {
+                Text("Cancelar")
+            }
+        }
+    )
 }

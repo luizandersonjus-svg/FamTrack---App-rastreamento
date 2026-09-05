@@ -344,7 +344,7 @@ class LocationService : Service() {
             ) {
                 return
             }
-            sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+            sensorManager = getSystemService(android.content.Context.SENSOR_SERVICE) as SensorManager
             stepSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
             stepSensor?.let { sensor ->
                 sensorManager?.registerListener(stepListener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
