@@ -172,19 +172,23 @@
 
     <!-- SOS / check-in (F5) -->
     <string name="sos_hold_hint">Segure o botão para acionar o SOS</string>
-    <string name="sos_confirm_title">Confirmar SOS?</string>
-    <string name="sos_confirm_text">Sua família será avisada imediatamente com sua localização.</string>
-    <string name="sos_confirm_action">Confirmar SOS</string>
-    <string name="sos_auto_cancel">Se não confirmar em %1$s s, o SOS será cancelado.</string>
+    <string name="sos_cancel_title">Alerta SOS enviado</string>
+    <string name="sos_cancel_text">Sua família foi avisada com sua localização. Você pode cancelar o alerta.</string>
+    <string name="sos_cancel_action">Cancelar alerta</string>
+    <string name="sos_cancel_close">Fechar</string>
+    <string name="sos_cancel_window">Fechando em %1$s s</string>
     <string name="sos_cancel">Cancelar</string>
     <string name="sos_sent">SOS enviado para a família</string>
-    <string name="sos_sent_fail">Não foi possível enviar o SOS</string>
+    <string name="sos_cancel_fail">Não foi possível cancelar o alerta SOS. Tente novamente.</string>
     <string name="sos_send_fail">Não foi possível enviar o SOS.</string>
     <string name="sos_cd">Acionar SOS</string>
     <string name="sos_no_location">Sem localização para enviar no SOS</string>
     <string name="checkin_doing">Fazendo check-in…</string>
     <string name="checkin_done">Check-in feito! </string>
     <string name="checkin_fail">Não foi possível fazer o check-in</string>
+    <string name="checkin_no_perm">Sem permissão de localização para o check-in</string>
+    <string name="checkin_no_location">Sem localização disponível neste momento</string>
+    <string name="checkin_timeout">O check-in excedeu o tempo de localização (15 s)</string>
     <string name="checkin_btn">Fazer check-in</string>
     <string name="checkin_cd">Fazer check-in na localização atual</string>
     <string name="sos_notif_channel">SOS e alertas</string>

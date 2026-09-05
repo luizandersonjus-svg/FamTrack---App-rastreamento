@@ -12,17 +12,16 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.famtrack.app.MainActivity
 import com.famtrack.app.R
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Criação de canais de notificação e exibição do alerta SOS em prioridade
  * alta (F5). As notificações são apenas locais: o FCM fica como próximo passo.
+ * O ID da notificação é determinístico a partir do ID do SOS para que a
+ * resolução/cancelamento possa remover a notificação corretamente.
  */
 object AlertNotifier {
 
     const val CHANNEL_ID_SOS = "sos_alerts"
-
-    private val nextId = AtomicInteger(2000)
 
     @JvmStatic
     fun ensureChannels(context: Context) {
@@ -44,7 +43,8 @@ object AlertNotifier {
         context: Context,
         displayName: String,
         alertLat: Double,
-        alertLng: Double
+        alertLng: Double,
+        sosId: String
     ) {
         ensureChannels(context)
 
@@ -57,6 +57,8 @@ object AlertNotifier {
             return
         }
 
+        val notificationId = sosId.hashCode()
+
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("sos_lat", alertLat)
@@ -64,7 +66,7 @@ object AlertNotifier {
         }
         val pendingIntent = PendingIntent.getActivity(
             context,
-            0,
+            notificationId,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -82,9 +84,19 @@ object AlertNotifier {
             .build()
 
         try {
-            NotificationManagerCompat.from(context).notify(nextId.getAndIncrement(), notification)
+            NotificationManagerCompat.from(context).notify(notificationId, notification)
         } catch (e: SecurityException) {
             e.printStackTrace()
+        }
+    }
+
+    @JvmStatic
+    fun cancelSosNotification(context: Context, sosId: String) {
+        val notificationId = sosId.hashCode()
+        try {
+            NotificationManagerCompat.from(context).cancel(notificationId)
+        } catch (_: Exception) {
+            // Falha ao cancelar: notificação pode já ter sido removida pelo sistema.
         }
     }
 }

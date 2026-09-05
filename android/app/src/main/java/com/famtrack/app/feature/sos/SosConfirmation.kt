@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -25,29 +26,34 @@ import androidx.compose.ui.unit.dp
 import com.famtrack.app.R
 import kotlinx.coroutines.delay
 
-private const val CONFIRM_WINDOW_SECONDS = 10
+private const val CANCEL_WINDOW_SECONDS = 10
 
 /**
- * Janela de confirmação do SOS: o usuário tem 10 segundos para confirmar;
- * se não confirmar, o envio é cancelado automaticamente (F5).
+ * Janela de CANCELAMENTO pós-envio do SOS (F5).
+ * O alerta JA foi enviado quando esta janela abre. O usuario tem 10 segundos
+ * para cancelar; ao fim do tempo a janela apenas fecha, SEM cancelar o SOS.
  */
 @Composable
-fun SosConfirmationDialog(
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+fun SosCancelWindowDialog(
+    onCancel: () -> Unit,
+    onWindowEnded: () -> Unit
 ) {
-    var remaining by remember { mutableIntStateOf(CONFIRM_WINDOW_SECONDS) }
+    var remaining by remember { mutableIntStateOf(CANCEL_WINDOW_SECONDS) }
+    var cancelRequested by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        while (remaining > 0) {
+        while (remaining > 0 && !cancelRequested) {
             delay(1000)
             remaining--
         }
-        onDismiss()
+        // Tempo encerrado: fecha a janela SEM resolver/cancelar o alerta.
+        if (!cancelRequested) {
+            onWindowEnded()
+        }
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = onWindowEnded,
         icon = {
             Icon(
                 Icons.Filled.Sos,
@@ -57,29 +63,34 @@ fun SosConfirmationDialog(
         },
         title = {
             Text(
-                text = stringResource(R.string.sos_confirm_title),
+                text = stringResource(R.string.sos_cancel_title),
                 color = MaterialTheme.colorScheme.error
             )
         },
         text = {
             Column {
-                Text(stringResource(R.string.sos_confirm_text))
+                Text(stringResource(R.string.sos_cancel_text))
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = stringResource(R.string.sos_auto_cancel, remaining),
+                    text = stringResource(R.string.sos_cancel_window, remaining),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm) {
-                Text(stringResource(R.string.sos_confirm_action))
+            Button(
+                onClick = {
+                    cancelRequested = true
+                    onCancel()
+                }
+            ) {
+                Text(stringResource(R.string.sos_cancel_action))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.sos_cancel))
+            TextButton(onClick = onWindowEnded) {
+                Text(stringResource(R.string.sos_cancel_close))
             }
         },
         modifier = Modifier

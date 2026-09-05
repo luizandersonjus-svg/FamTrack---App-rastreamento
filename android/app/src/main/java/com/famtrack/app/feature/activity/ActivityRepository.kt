@@ -13,7 +13,8 @@ class ActivityRepository {
         try {
             SupabaseClient.getInstance().from("events").insert(event)
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("ActivityRepository", "Falha ao registrar evento", e)
+            throw e
         }
     }
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,6 +35,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.famtrack.app.R
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.Location as FamLocation
@@ -57,10 +63,12 @@ import com.famtrack.app.feature.places.PlacesRepository
 import com.famtrack.app.feature.privacy.MemberFlags
 import com.famtrack.app.feature.privacy.PrivacyRepository
 import com.famtrack.app.feature.sos.AlertNotifier
+import com.famtrack.app.feature.sos.CheckInOutcome
 import com.famtrack.app.feature.sos.CheckInRepository
 import com.famtrack.app.feature.sos.RealtimeAlertListener
 import com.famtrack.app.feature.sos.SosButton
-import com.famtrack.app.feature.sos.SosConfirmationDialog
+import com.famtrack.app.feature.sos.SosCancelWindowDialog
+import com.famtrack.app.service.GeofenceWorker
 import com.famtrack.app.service.LocationService
 import io.github.jan.supabase.auth.auth
 import com.google.android.gms.location.*
@@ -69,6 +77,7 @@ import com.google.maps.android.compose.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,7 +121,10 @@ fun HomeScreen(
     var geofences by remember { mutableStateOf<List<Geofence>>(emptyList()) }
     var currentSteps by remember { mutableStateOf<Pair<String?, Int>?>(null) }
     var showCreatePlaceDialog by remember { mutableStateOf(false) }
-    var showSosConfirm by remember { mutableStateOf(false) }
+    var sosInFlight by remember { mutableStateOf(false) }
+    var showSosCancelWindow by remember { mutableStateOf(false) }
+    var pendingSosId by remember { mutableStateOf<String?>(null) }
+    var sosCancelling by remember { mutableStateOf(false) }
     var sosMessage by remember { mutableStateOf<String?>(null) }
     var places by remember { mutableStateOf<List<Place>>(emptyList()) }
     var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
@@ -123,6 +135,25 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         onboardingPending = !OnboardingPrefs.isDone(context)
+    }
+
+    // Agenda (de forma unica e permanente) a checagem periodica de geofences
+    // assim que o usuario tem familia, mantendo o intervalo de 15 min da F6.
+    LaunchedEffect(familyId) {
+        if (familyId != null) {
+            val workRequest = PeriodicWorkRequestBuilder<GeofenceWorker>(
+                15, TimeUnit.MINUTES
+            ).setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            ).build()
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                "geofence_check",
+                ExistingPeriodicWorkPolicy.KEEP,
+                workRequest
+            )
+        }
     }
 
     if (onboardingPending) {
@@ -301,23 +332,27 @@ fun HomeScreen(
     // Registra bateria fraca (<20%) uma vez por dia por membro (F6)
     LaunchedEffect(familyLocations) {
         val fid = familyId ?: return@LaunchedEffect
+        val uid = userId ?: return@LaunchedEffect
         val today = java.time.LocalDate.now().toString()
         val prefs = context.getSharedPreferences("low_battery_log", Context.MODE_PRIVATE)
         familyLocations.forEach { loc ->
-            val level = loc.batteryLevel
-            if (level != null && level < 20) {
-                val key = "${loc.user_id}_$today"
-                if (!prefs.getBoolean(key, false)) {
-                    ActivityRepository().recordEvent(
-                        Event(
-                            family_id = fid,
-                            type = "LOW_BATTERY",
-                            member_id = loc.user_id,
-                            lat = loc.latitude,
-                            lng = loc.longitude
+            // RLS: eventos apenas no nome do proprio usuario (member_id = auth.uid()).
+            if (loc.user_id == uid) {
+                val level = loc.batteryLevel
+                if (level != null && level < 20) {
+                    val key = "${loc.user_id}_$today"
+                    if (!prefs.getBoolean(key, false)) {
+                        ActivityRepository().recordEvent(
+                            Event(
+                                family_id = fid,
+                                type = "LOW_BATTERY",
+                                member_id = loc.user_id,
+                                lat = loc.latitude,
+                                lng = loc.longitude
+                            )
                         )
-                    )
-                    prefs.edit().putBoolean(key, true).apply()
+                        prefs.edit().putBoolean(key, true).apply()
+                    }
                 }
             }
         }
@@ -331,27 +366,36 @@ fun HomeScreen(
             RealtimeAlertListener.collectSosAlerts(
                 SupabaseClient.getInstance(),
                 fid,
-                uid
-            ) { alert ->
-                AlertNotifier.showSosNotification(
-                    context,
-                    memberInfos[alert.user_id]?.display_name
-                        ?: context.getString(R.string.sos_notif_fallback),
-                    alert.latitude,
-                    alert.longitude
-                )
-                activeSosAlerts = listOf(alert) + activeSosAlerts.filter { it.id != alert.id }
-            }
+                uid,
+                onAlert = { alert ->
+                    val alertId = alert.id
+                    if (alertId != null) {
+                        AlertNotifier.showSosNotification(
+                            context,
+                            memberInfos[alert.user_id]?.display_name
+                                ?: context.getString(R.string.sos_notif_fallback),
+                            alert.latitude,
+                            alert.longitude,
+                            alertId
+                        )
+                        activeSosAlerts = listOf(alert) + activeSosAlerts.filter { it.id != alert.id }
+                    }
+                },
+                onResolved = { sosId ->
+                    AlertNotifier.cancelSosNotification(context, sosId)
+                    activeSosAlerts = activeSosAlerts.filter { it.id != sosId }
+                }
+            )
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    if (showSosConfirm) {
-        SosConfirmationDialog(
-            onConfirm = {
-                showSosConfirm = false
-                scope.launch {
+    val triggerSos: () -> Unit = {
+        if (!sosInFlight) {
+            sosInFlight = true
+            scope.launch {
+                try {
                     val fId = familyId ?: return@launch
                     val uId = userId ?: return@launch
                     val (lat, lon) = currentLocation ?: run {
@@ -359,24 +403,59 @@ fun HomeScreen(
                         return@launch
                     }
                     try {
-                        sosRepository.triggerSos(fId, uId, lat, lon)
-                        ActivityRepository().recordEvent(
-                            Event(
-                                family_id = fId,
-                                type = "SOS",
-                                member_id = uId,
-                                lat = lat,
-                                lng = lon
+                        val alert = sosRepository.triggerSos(fId, uId, lat, lon)
+                        try {
+                            ActivityRepository().recordEvent(
+                                Event(
+                                    family_id = fId,
+                                    type = "SOS",
+                                    member_id = uId,
+                                    lat = lat,
+                                    lng = lon
+                                )
                             )
-                        )
+                        } catch (e: Exception) {
+                            // Auxiliar; não invalida o SOS em si.
+                            Log.e("HomeScreen", "Falha ao registrar evento SOS", e)
+                        }
+                        pendingSosId = alert.id
+                        showSosCancelWindow = true
                         sosMessage = context.getString(R.string.sos_sent)
                     } catch (e: Exception) {
                         e.printStackTrace()
                         sosMessage = context.getString(R.string.sos_send_fail)
                     }
+                } finally {
+                    sosInFlight = false
+                }
+            }
+        }
+    }
+
+    if (showSosCancelWindow) {
+        SosCancelWindowDialog(
+            onCancel = {
+                val alertId = pendingSosId ?: return@SosCancelWindowDialog
+                if (!sosCancelling) {
+                    scope.launch {
+                        sosCancelling = true
+                        try {
+                            sosRepository.resolveSos(alertId)
+                            pendingSosId = null
+                            showSosCancelWindow = false
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            sosMessage = context.getString(R.string.sos_cancel_fail)
+                        } finally {
+                            sosCancelling = false
+                        }
+                    }
                 }
             },
-            onDismiss = { showSosConfirm = false }
+            onWindowEnded = {
+                pendingSosId = null
+                showSosCancelWindow = false
+            }
         )
     }
 
@@ -560,13 +639,23 @@ fun HomeScreen(
                         if (!checkoutBusy) {
                             scope.launch {
                                 checkoutBusy = true
-                                val ok = CheckInRepository().checkIn(context)
-                                sosMessage = if (ok) {
-                                    context.getString(R.string.checkin_done)
-                                } else {
-                                    context.getString(R.string.checkin_fail)
+                                try {
+                                    val outcome = CheckInRepository().checkIn(context)
+                                    sosMessage = when (outcome) {
+                                        CheckInOutcome.SUCCESS ->
+                                            context.getString(R.string.checkin_done)
+                                        CheckInOutcome.NO_PERMISSION ->
+                                            context.getString(R.string.checkin_no_perm)
+                                        CheckInOutcome.NO_LOCATION ->
+                                            context.getString(R.string.checkin_no_location)
+                                        CheckInOutcome.TIMEOUT ->
+                                            context.getString(R.string.checkin_timeout)
+                                        CheckInOutcome.ERROR ->
+                                            context.getString(R.string.checkin_fail)
+                                    }
+                                } finally {
+                                    checkoutBusy = false
                                 }
-                                checkoutBusy = false
                             }
                         }
                     },
@@ -583,7 +672,7 @@ fun HomeScreen(
                 }
 
                 FloatingActionButton(
-                    onClick = { showSosConfirm = true },
+                    onClick = triggerSos,
                     containerColor = MaterialTheme.colorScheme.error,
                     contentColor = Color.White,
                     shape = CircleShape,
@@ -808,7 +897,7 @@ fun HomeScreen(
 
             // Botão de SOS com pressionar e segurar (F5)
             SosButton(
-                onTrigger = { showSosConfirm = true },
+                onTrigger = triggerSos,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(horizontal = 80.dp)

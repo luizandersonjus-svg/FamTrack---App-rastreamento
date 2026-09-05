@@ -27,13 +27,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.famtrack.app.R
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val HOLD_MILLIS = 3000L
 
 /**
- * Botão de SOS com pressionar e segurar por 3 segundos. Ao soltar com a
- * duração mínima, dispara onTrigger (F5).
+ * Botão de SOS com pressionar e segurar por 3 segundos. Ao completar os
+ * 3 segundos o SOS é acionado uma única vez (F5). Soltar antes dos 3
+ * segundos cancela o acionamento.
  */
 @Composable
 fun SosButton(
@@ -41,6 +44,7 @@ fun SosButton(
     modifier: Modifier = Modifier
 ) {
     var pressing by remember { mutableStateOf(false) }
+    var holdJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
 
     val progress by animateFloatAsState(
@@ -64,10 +68,14 @@ fun SosButton(
                     while (true) {
                         val down = awaitFirstDown()
                         val pointerId = down.id
+                        // Aciona ao completar 3 segundos (mantendo pressionado).
+                        val job = scope.launch {
+                            delay(HOLD_MILLIS)
+                            onTrigger()
+                        }
+                        holdJob = job
                         scope.launch { pressing = true }
-                        val start = System.currentTimeMillis()
                         var released = false
-                        var consumed = false
                         while (!released) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == pointerId }
@@ -77,18 +85,15 @@ fun SosButton(
                             }
                             if (!change.pressed) {
                                 released = true
-                                consumed = change.isConsumed
                                 break
                             }
                         }
-                        scope.launch {
-                            pressing = false
-                            if (released && !consumed &&
-                                System.currentTimeMillis() - start >= HOLD_MILLIS
-                            ) {
-                                onTrigger()
-                            }
+                        // Soltou antes dos 3 segundos: cancela o acionamento.
+                        if (released) {
+                            job.cancel()
+                            holdJob = null
                         }
+                        scope.launch { pressing = false }
                     }
                 }
             },

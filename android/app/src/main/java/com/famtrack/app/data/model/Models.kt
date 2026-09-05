@@ -1,5 +1,6 @@
 package com.famtrack.app.data.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -44,7 +45,9 @@ data class Location(
     val accuracy: Double? = null,
     val speed: Double? = null,
     val bearing: Double? = null,
+    @SerialName("battery_level")
     val batteryLevel: Int? = null,
+    @SerialName("last_updated_at")
     val lastUpdatedAt: Long? = null,
     val created_at: String? = null,
     // Dados do usuário (join)
@@ -61,6 +64,8 @@ data class Geofence(
     val radius_meters: Double = 100.0,
     val color: String = "#FF0000",
     val active: Boolean = true,
+    @SerialName("place_id")
+    val placeId: String? = null,
     val created_at: String? = null
 )
 

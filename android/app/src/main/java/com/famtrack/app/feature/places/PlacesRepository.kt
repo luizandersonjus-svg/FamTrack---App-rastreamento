@@ -30,20 +30,46 @@ class PlacesRepository {
         }
     }
 
-    private suspend fun removeGeofence(geofenceId: String) {
-        try {
-            geofenceRepository.deleteGeofence(geofenceId)
+    private suspend fun linkGeofenceToPlace(geofenceId: String, placeId: String): Boolean {
+        return try {
+            geofenceRepository.linkPlaceToGeofence(geofenceId, placeId)
+            true
         } catch (e: Exception) {
             e.printStackTrace()
+            false
         }
     }
 
     suspend fun createPlace(place: Place): Place? {
+        val placeId = try {
+            SupabaseClient.getInstance().from("places")
+                .insert(place.copy(geofence_id = null))
+                .decodeSingle<Place>()
+                .id
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        } ?: return null
         val geofenceId = registerGeofence(SupabaseClient.getInstance(), place)
-            ?: return null
-        return SupabaseClient.getInstance().from("places")
-            .insert(place.copy(geofence_id = geofenceId))
-            .decodeSingle<Place>()
+            ?: run {
+                // Place created but geofence failed: rewind the place to avoid leaving it unsynchronized.
+                try {
+                    SupabaseClient.getInstance().from("places")
+                        .delete {
+                            filter {
+                                eq("id", placeId)
+                            }
+                        }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                return null
+            }
+        val linked = linkGeofenceToPlace(geofenceId, placeId)
+        if (!linked) {
+            return null
+        }
+        return place.copy(id = placeId, geofence_id = geofenceId)
     }
 
     suspend fun getFamilyPlaces(familyId: String): List<Place> {
@@ -54,6 +80,14 @@ class PlacesRepository {
                 }
             }
             .decodeList<Place>()
+    }
+
+    private suspend fun removeGeofence(geofenceId: String) {
+        try {
+            geofenceRepository.deleteGeofence(geofenceId)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     suspend fun updatePlace(place: Place) {
@@ -74,7 +108,8 @@ class PlacesRepository {
                         center_lat = place.center_lat,
                         center_lon = place.center_lon,
                         radius_meters = place.radius_meters.toDouble(),
-                        color = "#FF0000"
+                        color = "#FF0000",
+                        placeId = place.id
                     )
                 )
             } catch (e: Exception) {

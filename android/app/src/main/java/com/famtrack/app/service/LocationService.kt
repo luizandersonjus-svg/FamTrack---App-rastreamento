@@ -180,8 +180,9 @@ class LocationService : Service() {
 
         serviceScope.launch {
             try {
-                val batteryLevel = (getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager)
+                val rawBattery = (getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager)
                     ?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                val batteryLevel = rawBattery?.takeIf { it in 0..100 }
                 val famLocation = com.famtrack.app.data.model.Location(
                     family_id = familyId,
                     user_id = userId,

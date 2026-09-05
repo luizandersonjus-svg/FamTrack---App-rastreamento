@@ -57,7 +57,7 @@ class GeofenceWorker(
             }
 
             for ((userId, userLocations) in memberLocations) {
-                if (userId == user.id) continue
+                val isSelf = userId == user.id
 
                 val latestLocation = userLocations.maxByOrNull { it.created_at ?: "" }
                     ?: continue
@@ -81,13 +81,18 @@ class GeofenceWorker(
                         val message = "$memberName chegou em ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode())
                         insertGeofenceNotification(user.id, familyId, title, message)
-                        recordEvent(familyId, userId, "ENTER", geofence.id, latestLocation)
+                        // RLS: eventos apenas no nome do proprio usuario (member_id = auth.uid()).
+                        if (isSelf) {
+                            recordEvent(familyId, userId, "ENTER", geofence.placeId, latestLocation)
+                        }
                     } else if (wasInside && !isInside) {
                         val title = geofence.name
                         val message = "$memberName saiu de ${geofence.name}"
                         sendGeofenceNotification(title, message, geofence.id.hashCode() + 1)
                         insertGeofenceNotification(user.id, familyId, title, message)
-                        recordEvent(familyId, userId, "EXIT", geofence.id, latestLocation)
+                        if (isSelf) {
+                            recordEvent(familyId, userId, "EXIT", geofence.placeId, latestLocation)
+                        }
                     }
 
                     updateGeofenceState(userId, geofence.id, isInside)

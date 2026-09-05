@@ -27,10 +27,29 @@ class GeofenceRepository {
 
     // Atualizar geofence
     suspend fun updateGeofence(geofence: Geofence) {
+        val payload = mutableMapOf<String, Any?>(
+            "name" to geofence.name,
+            "center_lat" to geofence.center_lat,
+            "center_lon" to geofence.center_lon,
+            "radius_meters" to geofence.radius_meters,
+            "color" to geofence.color,
+            "active" to geofence.active
+        )
+        geofence.placeId?.let { payload["place_id"] = it }
         client.from("geofences")
-            .update(geofence) {
+            .update(payload) {
                 filter {
                     eq("id", geofence.id!!)
+                }
+            }
+    }
+
+    // Vincula explicitamente uma geofence a um place_id (relação F6)
+    suspend fun linkPlaceToGeofence(geofenceId: String, placeId: String) {
+        client.from("geofences")
+            .update(mapOf("place_id" to placeId)) {
+                filter {
+                    eq("id", geofenceId)
                 }
             }
     }
