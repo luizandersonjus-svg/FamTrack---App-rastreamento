@@ -1,8 +1,11 @@
 package com.famtrack.app.ui.auth
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -30,11 +33,15 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.famtrack.app.R
+import com.famtrack.app.data.remote.AuthCallbackState
 import com.famtrack.app.data.remote.AuthRepository
-import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.data.remote.GoogleCredentialHelper
+import com.famtrack.app.data.remote.GoogleIdResult
 import com.famtrack.app.ui.theme.Blue500
 import com.famtrack.app.ui.theme.Blue700
-import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.status.SessionStatus
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -48,29 +55,75 @@ fun LoginScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var passwordVisible by remember { mutableStateOf(false) }
+    var googleWaiting by remember { mutableStateOf(false) }
+    var googleSigningIn by remember { mutableStateOf(false) }
+    var googleShowBrowserFallback by remember { mutableStateOf(false) }
+    var navigateHandled by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val authRepository = remember { AuthRepository() }
 
+    val sessionStatus by authRepository.sessionStatus.collectAsState()
+
+    LaunchedEffect(sessionStatus) {
+        Log.d("FamTrackAuth", "sessionStatus: ${sessionStatus::class.simpleName}")
+        if (sessionStatus is SessionStatus.Authenticated && !navigateHandled) {
+            navigateHandled = true
+            onLoginSuccess()
+        }
+    }
+
+    val callbackError by AuthCallbackState.error.collectAsState()
+
+    LaunchedEffect(callbackError) {
+        val error = callbackError ?: return@LaunchedEffect
+        errorMessage = mapGoogleError(context, error.code, error.description)
+        googleWaiting = false
+        AuthCallbackState.clear()
+    }
+
+    LaunchedEffect(googleWaiting) {
+        if (googleWaiting) {
+            delay(3 * 60_000L)
+            if (googleWaiting && !navigateHandled) {
+                errorMessage = context.getString(R.string.login_google_not_completed)
+                googleWaiting = false
+            }
+        }
+    }
+
+    LifecycleResumeEffect(googleWaiting) {
+        if (googleWaiting) {
+            val windowJob = scope.launch {
+                delay(25_000)
+                if (googleWaiting && !navigateHandled) {
+                    errorMessage = context.getString(R.string.login_google_not_completed)
+                    googleWaiting = false
+                }
+            }
+            onPauseOrDispose { windowJob.cancel() }
+        } else {
+            onPauseOrDispose { }
+        }
+    }
+
     val googleOAuthLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        isLoading = true
-        scope.launch {
-            delay(2000)
-            try {
-                val user = SupabaseClient.getInstance().auth.currentUserOrNull()
-                if (user != null) {
-                    onLoginSuccess()
-                } else {
-                    errorMessage = "Login com Google nao concluido. Tente novamente."
-                    isLoading = false
-                }
-            } catch (e: Exception) {
-                errorMessage = "Erro: ${e.message}"
-                isLoading = false
-            }
+    ) { }
+
+    val startWebOAuth: () -> Unit = {
+        googleSigningIn = false
+        googleShowBrowserFallback = false
+        try {
+            val url = authRepository.getGoogleOAuthUrl()
+            Log.d("FamTrackAuth", "OAuth URL gerada")
+            googleWaiting = true
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            googleOAuthLauncher.launch(intent)
+        } catch (e: Exception) {
+            errorMessage = mapGoogleError(context, null, e.message)
+            googleWaiting = false
         }
     }
 
@@ -209,6 +262,7 @@ fun LoginScreen(
                                 errorMessage = null
                                 try {
                                     authRepository.signInWithEmail(email, password)
+                                    navigateHandled = true
                                     onLoginSuccess()
                                 } catch (e: Exception) {
                                     val msg = e.message ?: ""
@@ -244,16 +298,50 @@ fun LoginScreen(
 
                     OutlinedButton(
                         onClick = {
+                            errorMessage = null
+                            googleShowBrowserFallback = false
+                            val activity = context.findActivity()
+                            if (activity == null) {
+                                Log.w("FamTrackAuth", "context nao e Activity; usando fallback web OAuth")
+                                startWebOAuth()
+                                return@OutlinedButton
+                            }
+                            googleSigningIn = true
                             scope.launch {
-                                isLoading = true
-                                errorMessage = null
-                                try {
-                                    val url = authRepository.getGoogleOAuthUrl()
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                    googleOAuthLauncher.launch(intent)
-                                } catch (e: Exception) {
-                                    errorMessage = "Erro ao iniciar Google: ${e.message}"
-                                    isLoading = false
+                                val webClientId = context.getString(R.string.default_web_client_id)
+                                when (val result = GoogleCredentialHelper.getGoogleIdToken(activity, webClientId)) {
+                                    is GoogleIdResult.Success -> {
+                                        googleSigningIn = false
+                                        try {
+                                            authRepository.signInWithGoogle(result.idToken, result.rawNonce)
+                                            navigateHandled = true
+                                            onLoginSuccess()
+                                        } catch (e: Exception) {
+                                            errorMessage = mapGoogleError(context, null, e.message)
+                                        }
+                                    }
+
+                                    GoogleIdResult.Cancelled -> {
+                                        Log.d("FamTrackAuth", "google signing cancelado pelo usuario")
+                                        googleSigningIn = false
+                                    }
+
+                                    GoogleIdResult.NoAccount -> {
+                                        errorMessage = context.getString(R.string.login_google_err_no_account)
+                                        googleSigningIn = false
+                                        googleShowBrowserFallback = true
+                                    }
+
+                                    GoogleIdResult.Unavailable -> {
+                                        Log.d("FamTrackAuth", "credential manager indisponivel -> fallback web OAuth")
+                                        startWebOAuth()
+                                    }
+
+                                    is GoogleIdResult.Failed -> {
+                                        errorMessage = mapGoogleError(context, null, result.message)
+                                        googleSigningIn = false
+                                        googleShowBrowserFallback = true
+                                    }
                                 }
                             }
                         },
@@ -261,9 +349,66 @@ fun LoginScreen(
                             .fillMaxWidth()
                             .height(56.dp),
                         shape = RoundedCornerShape(8.dp),
-                        enabled = !isLoading
+                        enabled = !isLoading && !googleWaiting && !googleSigningIn
                     ) {
-                        Text("Entrar com Google", fontSize = 16.sp)
+                        if (googleSigningIn) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = context.getString(R.string.login_google_connecting),
+                                    fontSize = 16.sp
+                                )
+                            }
+                        } else {
+                            Text("Entrar com Google", fontSize = 16.sp)
+                        }
+                    }
+
+                    if (googleShowBrowserFallback) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        TextButton(
+                            onClick = { startWebOAuth() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(context.getString(R.string.login_google_use_browser))
+                        }
+                    }
+
+                    if (googleWaiting) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = context.getString(R.string.login_google_waiting),
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    googleWaiting = false
+                                    errorMessage = null
+                                }
+                            ) {
+                                Text(context.getString(R.string.login_google_cancel))
+                            }
+                        }
                     }
                 }
             }
@@ -288,3 +433,55 @@ fun LoginScreen(
         }
     }
 }
+
+private fun mapGoogleError(context: Context, code: String?, description: String?): String {
+    val combined = listOfNotNull(code, description).joinToString(" ").lowercase()
+    return when {
+        combined.contains("audience") ||
+            combined.contains("aud mismatch") ||
+            combined.contains("invalid_aud") ->
+            context.getString(R.string.login_google_err_client_id)
+
+        combined.contains("nonce") ->
+            context.getString(R.string.login_google_err_nonce)
+
+        combined.contains("provider is not enabled") || combined.contains("unsupported provider") ->
+            context.getString(R.string.login_google_err_provider_disabled)
+
+        combined.contains("redirec") ->
+            context.getString(R.string.login_google_err_redirect)
+
+        combined.contains("access_denied") ->
+            context.getString(R.string.login_google_err_denied)
+
+        combined.contains("signups not allowed") ->
+            context.getString(R.string.login_google_err_signup)
+
+        combined.contains("invalid_grant") ||
+            combined.contains("code verifier") ||
+            combined.contains("pkce") ||
+            combined.contains("flow state") ->
+            context.getString(R.string.login_google_err_pkce)
+
+        combined.contains("unknownhost") ||
+            combined.contains("timeout") ||
+            combined.contains("failed to connect") ||
+            combined.contains("unable to resolve") ||
+            combined.contains("no address associated") ||
+            combined.contains("network") ->
+            context.getString(R.string.login_google_err_network)
+
+        else -> {
+            val generic = context.getString(R.string.login_google_err_generic)
+            val detail = description?.trim()?.take(120)
+            if (!detail.isNullOrBlank()) "$generic\n$detail" else generic
+        }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? =
+    when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }

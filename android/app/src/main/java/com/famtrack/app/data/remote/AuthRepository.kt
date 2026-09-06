@@ -7,6 +7,8 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.auth.providers.builtin.IDToken
+import io.github.jan.supabase.auth.status.SessionStatus
+import kotlinx.coroutines.flow.StateFlow
 
 class AuthRepository {
 
@@ -26,10 +28,11 @@ class AuthRepository {
         }
     }
 
-    suspend fun signInWithGoogle(idToken: String) {
+    suspend fun signInWithGoogle(idToken: String, rawNonce: String? = null) {
         client.auth.signInWith(IDToken) {
             this.idToken = idToken
             provider = Google
+            if (rawNonce != null) this.nonce = rawNonce
         }
     }
 
@@ -40,6 +43,11 @@ class AuthRepository {
     fun getCurrentUser() = client.auth.currentUserOrNull()
 
     suspend fun getCurrentSession() = client.auth.currentSessionOrNull()
+
+    val sessionStatus: StateFlow<SessionStatus>
+        get() = client.auth.sessionStatus
+
+    suspend fun hasStoredSession(): Boolean = client.auth.sessionManager.loadSession() != null
 
     suspend fun signOut() {
         client.auth.signOut()

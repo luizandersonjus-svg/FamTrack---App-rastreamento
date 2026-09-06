@@ -1,6 +1,8 @@
 package com.famtrack.app.ui.history
 
+import android.content.Context
 import android.location.Location
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -15,7 +17,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -27,6 +31,10 @@ import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.common.AddressOutcome
+import com.famtrack.app.feature.common.AddressResolver
+import com.famtrack.app.feature.places.Place
+import com.famtrack.app.feature.places.PlacesRepository
 import com.famtrack.app.util.isInsideGeofence
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
@@ -34,6 +42,8 @@ import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.maps.android.compose.*
 import io.github.jan.supabase.auth.auth
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -50,6 +60,7 @@ fun HistoryScreen(
     val geofenceRepository = remember { GeofenceRepository() }
 
     val zone = remember { ZoneId.systemDefault() }
+    val context = LocalContext.current
     val today = remember { LocalDate.now(zone) }
     val minDate = remember { today.minusDays(30) }
 
@@ -65,6 +76,10 @@ fun HistoryScreen(
     var showDatePicker by remember { mutableStateOf(false) }
     var dayVisits by remember { mutableStateOf<List<Visit>>(emptyList()) }
     var geofences by remember { mutableStateOf<List<Geofence>>(emptyList()) }
+    var places by remember { mutableStateOf<List<Place>>(emptyList()) }
+    var selectedTripIndex by remember { mutableStateOf(-1) }
+    var tripLabels by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var speedAlertKmh by remember { mutableStateOf(readSpeedAlertPref(context)) }
 
     LaunchedEffect(Unit) {
         try {
@@ -90,6 +105,7 @@ fun HistoryScreen(
         val fid = familyId ?: return@LaunchedEffect
         try {
             geofences = geofenceRepository.getFamilyGeofences(fid)
+            places = PlacesRepository().getFamilyPlaces(fid)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -290,6 +306,16 @@ fun HistoryScreen(
                     val orderedPoints = routePoints.sortedBy {
                         parseTimestampMillis(it.recorded_at) ?: Long.MAX_VALUE
                     }
+                    // Trechos de deslocamento do dia (calculado no aparelho, sem SQL).
+                    val tripsResult = remember(routePoints, speedAlertKmh) {
+                        computeTrips(
+                            points = routePoints.sortedBy {
+                                parseTimestampMillis(it.recorded_at) ?: Long.MAX_VALUE
+                            },
+                            speedLimitKmh = if (speedAlertKmh > 0) speedAlertKmh.toDouble() else null
+                        )
+                    }
+                    val trips = tripsResult.trips
                     // Decimação somente para renderizar a Polyline em dias com dados legados densos.
                     val displayPoints = if (orderedPoints.size > MAX_DISPLAY_POINTS) {
                         decimate(orderedPoints, MAX_DISPLAY_POINTS)
@@ -319,13 +345,70 @@ fun HistoryScreen(
                             )
                         }
                     }
+
+                    // Nomeia origem/destino de cada percurso (place salvo → endereço → "Local aproximado").
+                    LaunchedEffect(trips, orderedPoints, places) {
+                        if (trips.isEmpty() || orderedPoints.isEmpty()) {
+                            tripLabels = emptyList()
+                            return@LaunchedEffect
+                        }
+                        tripLabels = withContext(Dispatchers.IO) {
+                            trips.map { trip ->
+                                val origin = orderedPoints[trip.pointStart]
+                                val dest = orderedPoints[trip.pointEnd]
+                                tripLocationLabel(context, places, origin.latitude, origin.longitude) to
+                                    tripLocationLabel(context, places, dest.latitude, dest.longitude)
+                            }
+                        }
+                    }
+
+                    // Destaca no mapa o trecho do percurso selecionado (por janela de tempo).
+                    val selectedTrip = trips.getOrNull(selectedTripIndex)
+                    val selectedTripLatLngs = remember(selectedTripIndex, displayPoints) {
+                        val t = selectedTrip ?: return@remember emptyList<LatLng>()
+                        displayPoints.mapNotNull { p ->
+                            val millis = parseTimestampMillis(p.recorded_at)
+                            if (millis != null && millis in t.startMillis..t.endMillis) {
+                                LatLng(p.latitude, p.longitude)
+                            } else null
+                        }
+                    }
+                    LaunchedEffect(selectedTripIndex, trips) {
+                        val t = selectedTrip ?: return@LaunchedEffect
+                        if (selectedTripLatLngs.size >= 2) {
+                            val (clat, clon, zoom) = computeRouteCenterAndZoom(selectedTripLatLngs)
+                            cameraPositionState.animate(
+                                CameraUpdateFactory.newLatLngZoom(LatLng(clat, clon), zoom),
+                                900
+                            )
+                        }
+                    }
                     Column(
                         modifier = Modifier.fillMaxSize()
                     ) {
+                        DayTripsSection(
+                            trips = trips,
+                            labels = tripLabels,
+                            selectedIndex = selectedTripIndex,
+                            speedAlertKmh = speedAlertKmh,
+                            onSpeedLimitChange = { value ->
+                                speedAlertKmh = value
+                                writeSpeedAlertPref(context, value)
+                            },
+                            truncated = tripsResult.truncated,
+                            onRefresh = { reloadToken++ },
+                            onSelect = { index ->
+                                selectedTripIndex = if (selectedTripIndex == index) -1 else index
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(0.24f)
+                                .padding(horizontal = 16.dp)
+                        )
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .fillMaxHeight(0.5f)
+                                .weight(0.46f)
                         ) {
                             GoogleMap(
                                 modifier = Modifier.fillMaxSize(),
@@ -339,6 +422,18 @@ fun HistoryScreen(
                                             alpha = if (showPlayback) 0.35f else 1f
                                         ),
                                         width = 6f
+                                    )
+                                }
+                                val hl = selectedTrip
+                                if (hl != null && selectedTripLatLngs.size >= 2) {
+                                    Polyline(
+                                        points = selectedTripLatLngs,
+                                        color = if (hl.possibleSpeeding) {
+                                            Color(0xFFFF6D00)
+                                        } else {
+                                            MaterialTheme.colorScheme.tertiary
+                                        },
+                                        width = 8f
                                     )
                                 }
                                 orderedPoints.firstOrNull()?.let { first ->
@@ -413,7 +508,7 @@ fun HistoryScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(1f)
+                                .weight(0.30f)
                                 .verticalScroll(rememberScrollState())
                                 .padding(horizontal = 16.dp)
                         ) {
@@ -750,3 +845,400 @@ fun DaySummarySection(visits: List<Visit>) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Trechos de deslocamento (Partes B e C)
+// ---------------------------------------------------------------------------
+
+private const val STOP_RADIUS_METERS = 60.0
+private const val STOP_MIN_DURATION_MILLIS = 5 * 60 * 1000L
+private const val MIN_TRIP_DISTANCE_METERS = 100.0
+private const val MIN_TRIP_DURATION_MILLIS = 2 * 60 * 1000L
+private const val MAX_TRIP_POINTS = 5000
+
+// Limiar de alerta "possível excesso": configurável (40–100 km/h ou desativado),
+// persistido em SharedPreferences própria (não mexe em privacy_prefs).
+private const val DEFAULT_SPEED_ALERT_KMH = 60
+private const val SPEED_PREFS_NAME = "speed_alert_prefs"
+private const val SPEED_PREFS_KEY = "trip_speed_alert_kmh"
+
+private fun readSpeedAlertPref(context: Context): Int =
+    context.getSharedPreferences(SPEED_PREFS_NAME, Context.MODE_PRIVATE)
+        .getInt(SPEED_PREFS_KEY, DEFAULT_SPEED_ALERT_KMH)
+
+private fun writeSpeedAlertPref(context: Context, value: Int) {
+    context.getSharedPreferences(SPEED_PREFS_NAME, Context.MODE_PRIVATE)
+        .edit()
+        .putInt(SPEED_PREFS_KEY, value)
+        .apply()
+}
+
+/**
+ * Resumo de um deslocamento entre duas paradas. [pointStart]/[pointEnd] são
+ * índices na lista ordenada de pontos usada no cálculo.
+ */
+data class TripSummary(
+    val pointStart: Int,
+    val pointEnd: Int,
+    val startMillis: Long,
+    val endMillis: Long,
+    val durationMillis: Long,
+    val distanceMeters: Double,
+    val avgSpeedKmh: Double?,
+    val maxSpeedKmh: Double?,
+    val possibleSpeeding: Boolean
+)
+
+private data class TimedPoint(val point: RoutePoint, val timeMillis: Long)
+
+private data class TripsResult(
+    val trips: List<TripSummary>,
+    val truncated: Boolean
+)
+
+/**
+ * Divide o dia em trechos de deslocamento:
+ * - "parada" = pessoa fica dentro de ~60m por >= 5 min (calculado no aparelho);
+ * - trecho muito curto (< 100 m ou < 2 min) é descartado;
+ * - [speedLimitKmh] nulo desativa o alerta de velocidade.
+ * Para dias com muitos pontos legados, limita a 5000 pontos e sinaliza
+ * [TripsResult.truncated] para a UI avisar discretamente.
+ */
+private fun computeTrips(points: List<RoutePoint>, speedLimitKmh: Double?): TripsResult {
+    val truncated = points.size > MAX_TRIP_POINTS
+    val capped = if (truncated) points.take(MAX_TRIP_POINTS) else points
+    if (capped.size < 2) return TripsResult(emptyList(), truncated)
+    val timed = capped.mapNotNull { p ->
+        parseTimestampMillis(p.recorded_at)?.let { TimedPoint(p, it) }
+    }
+    if (timed.size < 2) return TripsResult(emptyList(), truncated)
+
+    val n = timed.size
+    val inStop = BooleanArray(n)
+
+    var i = 0
+    while (i < n) {
+        if (inStop[i]) { i++; continue }
+        val base = timed[i]
+        var k = i
+        while (k + 1 < n) {
+            val next = timed[k + 1]
+            val d = FloatArray(1)
+            Location.distanceBetween(
+                base.point.latitude, base.point.longitude,
+                next.point.latitude, next.point.longitude, d
+            )
+            if (d[0] > STOP_RADIUS_METERS) break
+            k++
+        }
+        if (k - i >= 2 && timed[k].timeMillis - base.timeMillis >= STOP_MIN_DURATION_MILLIS) {
+            for (j in i..k) inStop[j] = true
+            i = k + 1
+        } else {
+            i++
+        }
+    }
+
+    val trips = mutableListOf<TripSummary>()
+    var start = -1
+    for (idx in 0 until n) {
+        if (inStop[idx]) {
+            if (start != -1) {
+                flushTrip(timed, start, idx - 1, speedLimitKmh)?.let { trips += it }
+                start = -1
+            }
+        } else {
+            if (start == -1) start = idx
+        }
+    }
+    if (start != -1) flushTrip(timed, start, n - 1, speedLimitKmh)?.let { trips += it }
+    return TripsResult(trips.sortedBy { it.startMillis }, truncated)
+}
+
+private fun flushTrip(
+    timed: List<TimedPoint>,
+    start: Int,
+    end: Int,
+    speedLimitKmh: Double?
+): TripSummary? {
+    if (end - start < 1) return null
+    var distance = 0.0
+    var maxSpeed: Double? = null
+    var runSegments = 0
+    var runDurationMs = 0L
+    var speeding = false
+
+    fun checkRun() {
+        if (runSegments > 0 && (runDurationMs >= 10_000 || runSegments >= 2)) {
+            speeding = true
+        }
+        runSegments = 0
+        runDurationMs = 0
+    }
+
+    for (j in (start + 1)..end) {
+        val a = timed[j - 1]
+        val b = timed[j]
+        val d = FloatArray(1)
+        Location.distanceBetween(
+            a.point.latitude, a.point.longitude,
+            b.point.latitude, b.point.longitude, d
+        )
+        val dist = d[0].toDouble().coerceAtLeast(0.0)
+        distance += dist
+        val dtMs = (b.timeMillis - a.timeMillis).coerceAtLeast(0L)
+        val kmh = b.point.speed?.let { it * 3.6 }
+            ?: if (dtMs > 0) (dist / (dtMs / 1000.0)) * 3.6 else null
+        if (kmh != null) {
+            if (maxSpeed == null || kmh > maxSpeed) maxSpeed = kmh
+            // Alerta avaliado só quando um limite foi configurado (null = desativado).
+            if (speedLimitKmh != null) {
+                if (kmh > speedLimitKmh) {
+                    runSegments++
+                    runDurationMs += dtMs
+                } else {
+                    checkRun()
+                }
+            }
+        }
+        // velocidade desconhecida (sem campo e dt=0): não quebra nem acumula
+    }
+    checkRun()
+
+    val duration = timed[end].timeMillis - timed[start].timeMillis
+    if (distance < MIN_TRIP_DISTANCE_METERS || duration < MIN_TRIP_DURATION_MILLIS) return null
+    val avg = if (duration > 0) (distance / (duration / 1000.0)) * 3.6 else null
+    return TripSummary(
+        pointStart = start,
+        pointEnd = end,
+        startMillis = timed[start].timeMillis,
+        endMillis = timed[end].timeMillis,
+        durationMillis = duration,
+        distanceMeters = distance,
+        avgSpeedKmh = avg,
+        maxSpeedKmh = maxSpeed,
+        possibleSpeeding = speeding
+    )
+}
+
+/**
+ * Rótulo de origem/destino de um trecho: nome do Place salvo (se dentro do
+ * raio), senão endereço via Geocoder, senão "Local aproximado".
+ */
+private suspend fun tripLocationLabel(
+    context: Context,
+    places: List<Place>,
+    latitude: Double,
+    longitude: Double
+): String {
+    val inside = places.firstOrNull {
+        isInsideGeofence(
+            latitude,
+            longitude,
+            it.center_lat,
+            it.center_lon,
+            it.radius_meters.toDouble()
+        )
+    }
+    if (inside != null) return inside.name
+    return when (val outcome = AddressResolver.resolve(context, latitude, longitude)) {
+        is AddressOutcome.Found -> outcome.text
+        else -> context.getString(R.string.history_local_approx)
+    }
+}
+
+/**
+ * Seção "Percursos do dia": fica no TOPO do histórico, com lista compacta de
+ * trechos clicáveis, seletor do limite de velocidade do alerta, botão de
+ * atualização e aviso discreto quando o dia foi truncado em 5000 pontos.
+ */
+@Composable
+private fun DayTripsSection(
+    trips: List<TripSummary>,
+    labels: List<Pair<String, String>>,
+    selectedIndex: Int,
+    speedAlertKmh: Int,
+    onSpeedLimitChange: (Int) -> Unit,
+    truncated: Boolean,
+    onRefresh: () -> Unit,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val speedOptions = listOf(40, 50, 60, 80, 100, 0)
+    val speedLabelText: @Composable (Int) -> String = { opt ->
+        if (opt == 0) {
+            stringResource(R.string.history_speed_off)
+        } else {
+            stringResource(R.string.history_speed_label, opt)
+        }
+    }
+    var showSpeedMenu by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState())
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.history_trips_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onRefresh) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.history_trips_refresh),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.history_speed_limit_title),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Box {
+                TextButton(onClick = { showSpeedMenu = true }) {
+                    Text(
+                        text = speedLabelText(speedAlertKmh),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Icon(
+                        Icons.Default.ArrowDropDown,
+                        contentDescription = null
+                    )
+                }
+                DropdownMenu(
+                    expanded = showSpeedMenu,
+                    onDismissRequest = { showSpeedMenu = false }
+                ) {
+                    speedOptions.forEach { opt ->
+                        DropdownMenuItem(
+                            text = { Text(speedLabelText(opt)) },
+                            onClick = {
+                                showSpeedMenu = false
+                                onSpeedLimitChange(opt)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        if (truncated) {
+            Text(
+                text = stringResource(R.string.history_trip_truncated, MAX_TRIP_POINTS),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+        if (trips.isEmpty()) {
+            Text(
+                text = stringResource(R.string.history_trip_no_trips),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.history_trips_empty_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        } else {
+            trips.forEachIndexed { index, trip ->
+                val origin = labels.getOrNull(index)?.first
+                    ?: stringResource(R.string.history_local_approx)
+                val dest = labels.getOrNull(index)?.second
+                    ?: stringResource(R.string.history_local_approx)
+                val selected = selectedIndex == index
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .clickable { onSelect(index) },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (selected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        }
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.history_trip_from_to, origin, dest),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = stringResource(
+                                R.string.history_trip_meta,
+                                tripDurationText(trip.durationMillis),
+                                distanceText(trip.distanceMeters),
+                                speedText(trip.avgSpeedKmh),
+                                speedText(trip.maxSpeedKmh)
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (trip.possibleSpeeding) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = stringResource(R.string.history_trip_speeding),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = stringResource(R.string.history_trip_speed_note),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun tripDurationText(durationMillis: Long): String {
+    val totalMin = (durationMillis / 60_000L).toInt().coerceAtLeast(0)
+    val hours = totalMin / 60
+    val minutes = totalMin % 60
+    return if (hours > 0) {
+        stringResource(R.string.history_duration_h, "$hours", "$minutes")
+    } else {
+        stringResource(R.string.history_duration_min, "$minutes")
+    }
+}
+
+private fun speedText(v: Double?): String =
+    if (v == null) "—" else String.format(Locale.getDefault(), "%.0f", v)

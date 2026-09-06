@@ -91,6 +91,7 @@ fun HomeScreen(
     onNavigateToActivity: () -> Unit,
     onNavigateToInvite: () -> Unit,
     onNavigateToPrivacy: () -> Unit,
+    onNavigateToRoutes: () -> Unit,
     onNavigateToMemberHistory: (String) -> Unit,
     onLogout: () -> Unit
 ) {
@@ -133,6 +134,7 @@ fun HomeScreen(
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
     var checkoutBusy by remember { mutableStateOf(false) }
     var onboardingPending by remember { mutableStateOf(true) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         onboardingPending = !OnboardingPrefs.isDone(context)
@@ -524,12 +526,7 @@ fun HomeScreen(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    IconButton(onClick = {
-                        scope.launch {
-                            SupabaseClient.getInstance().auth.signOut()
-                            onLogout()
-                        }
-                    }) {
+                    IconButton(onClick = { showLogoutDialog = true }) {
                         Icon(
                             Icons.Default.Logout,
                             contentDescription = stringResource(R.string.logout),
@@ -582,6 +579,29 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            if (showLogoutDialog) {
+                AlertDialog(
+                    onDismissRequest = { showLogoutDialog = false },
+                    title = { Text(stringResource(R.string.settings_logout_title)) },
+                    text = { Text(stringResource(R.string.settings_logout_message)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showLogoutDialog = false
+                            scope.launch {
+                                SupabaseClient.getInstance().auth.signOut()
+                                onLogout()
+                            }
+                        }) {
+                            Text(stringResource(R.string.settings_logout_confirm))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showLogoutDialog = false }) {
+                            Text(stringResource(R.string.settings_logout_cancel))
+                        }
+                    }
+                )
+            }
             GoogleMap(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
@@ -814,6 +834,24 @@ fun HomeScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                ExtendedFloatingActionButton(
+                    onClick = onNavigateToRoutes,
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Directions,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.home_action_routes),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
                 FloatingActionButton(
                     onClick = {
                         currentLocation?.let { (lat, lon) ->

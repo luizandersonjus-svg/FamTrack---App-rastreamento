@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -28,6 +29,7 @@ import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
 import coil.compose.AsyncImage
+import com.famtrack.app.R
 import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.HealthConnectRepository
 import com.famtrack.app.data.remote.HeartRateSummary
@@ -39,7 +41,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    onOpenRoutes: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var showProfileDialog by remember { mutableStateOf(false) }
@@ -48,6 +51,7 @@ fun SettingsScreen(
     var showAboutDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var showDevicesDialog by remember { mutableStateOf(false) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
 
     if (showProfileDialog) {
         ProfileDialog(onDismiss = { showProfileDialog = false })
@@ -66,6 +70,30 @@ fun SettingsScreen(
     }
     if (showDevicesDialog) {
         DevicesDialog(onDismiss = { showDevicesDialog = false })
+    }
+
+    if (showLogoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutDialog = false },
+            title = { Text(stringResource(R.string.settings_logout_title)) },
+            text = { Text(stringResource(R.string.settings_logout_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLogoutDialog = false
+                    scope.launch {
+                        SupabaseClient.getInstance().auth.signOut()
+                        onLogout()
+                    }
+                }) {
+                    Text(stringResource(R.string.settings_logout_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutDialog = false }) {
+                    Text(stringResource(R.string.settings_logout_cancel))
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -161,6 +189,31 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
+                text = stringResource(R.string.settings_route_section_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                SettingsItem(
+                    icon = Icons.Default.NearMe,
+                    title = stringResource(R.string.settings_route_item_title),
+                    subtitle = stringResource(R.string.settings_route_item_subtitle),
+                    onClick = onOpenRoutes
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
                 text = "Notificacoes",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
@@ -233,12 +286,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.weight(1f))
 
             Button(
-                onClick = {
-                    scope.launch {
-                        SupabaseClient.getInstance().auth.signOut()
-                        onLogout()
-                    }
-                },
+                onClick = { showLogoutDialog = true },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -252,7 +300,7 @@ fun SettingsScreen(
                     contentDescription = null,
                     modifier = Modifier.padding(end = 8.dp)
                 )
-                Text("Sair da conta", fontSize = 16.sp)
+                Text(stringResource(R.string.settings_logout_title), fontSize = 16.sp)
             }
         }
     }

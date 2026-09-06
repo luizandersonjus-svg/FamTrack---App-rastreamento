@@ -218,6 +218,13 @@
     <string name="activity_sos">acionou o SOS em %1$s</string>
     <string name="activity_checkin">fez check-in em %1$s</string>
     <string name="activity_low_battery">ficou com bateria abaixo de 20%%</string>
+    <string name="activity_enter_no_loc">chegou em um local</string>
+    <string name="activity_exit_no_loc">saiu de um local</string>
+    <string name="activity_sos_no_loc">acionou o SOS</string>
+    <string name="activity_checkin_no_loc">fez check-in</string>
+    <string name="address_not_found">Endere\u00e7o n\u00e3o encontrado</string>
+    <string name="address_near_place">Pr\u00f3ximo de %1$s</string>
+    <string name="address_approx_coords">Coordenadas aproximadas (%1$s, %2$s)</string>
 
     <!-- Privacidade (F7) -->
     <string name="privacy_title">Privacidade</string>
@@ -232,6 +239,7 @@
     <string name="home_action_places">Locais</string>
     <string name="home_action_activity">Atividade</string>
     <string name="home_action_invite">Convidar</string>
+    <string name="home_action_routes">Rotas</string>
 <string name="home_action_privacy">Privacidade</string>
     <string name="sos_notif_fallback">Um membro da fam\u00edlia</string>
 
@@ -254,6 +262,21 @@
     <string name="history_summary_title">Resumo do dia</string>
     <string name="history_start_marker">In\u00edcio</string>
     <string name="history_end_marker">Fim</string>
+    <string name="history_trips_title">Percursos do dia</string>
+    <string name="history_trip_from_to">De %1$s a %2$s</string>
+    <string name="history_trip_meta">%1$s \u2022 %2$s \u2022 m\u00e9dia %3$s km/h \u2022 m\u00e1x. %4$s km/h</string>
+    <string name="history_trip_no_trips">Nenhum deslocamento significativo neste dia</string>
+    <string name="history_trip_speeding">Poss\u00edvel excesso de velocidade</string>
+    <string name="history_trip_speed_note">Baseado na velocidade GPS. Limite da via n\u00e3o verificado.</string>
+    <string name="history_trip_truncated">Dia extenso: lista limitada aos primeiros %1$d pontos (amostra).</string>
+    <string name="history_trips_refresh">Atualizar</string>
+    <string name="history_trips_empty_hint">Ande com o app aberto por alguns minutos para registrar percursos.</string>
+    <string name="history_speed_limit_title">Limite de velocidade do alerta</string>
+    <string name="history_speed_off">Desativado</string>
+    <string name="history_speed_label">%1$d km/h</string>
+    <string name="history_local_approx">Local aproximado</string>
+    <string name="history_duration_min">%1$s min</string>
+    <string name="history_duration_h">%1$s h %2$s min</string>
 
     <!-- Reprodução do trajeto (RoutePlayback) -->
     <string name="playback_button">Reproduzir trajeto</string>
@@ -265,4 +288,48 @@
     <string name="playback_finished">Fim do trajeto</string>
     <string name="playback_stopped">Parado por %1$s min</string>
     <string name="playback_insufficient">Trajeto insuficiente para reprodu\u00e7\u00e3o</string>
+
+    <!-- Login com Google (OAuth web) -->
+    <string name="login_google_waiting">Aguardando confirma\u00e7\u00e3o do Google\u2026</string>
+    <string name="login_google_cancel">Cancelar</string>
+    <string name="login_google_not_completed">Login com Google n\u00e3o conclu\u00eddo. Tente novamente.</string>
+    <string name="login_google_err_provider_disabled">Login com Google n\u00e3o est\u00e1 habilitado no servidor.</string>
+    <string name="login_google_err_redirect">URL de retorno do app n\u00e3o est\u00e1 autorizada no servidor.</string>
+    <string name="login_google_err_denied">Acesso negado ou login cancelado no Google. Se o app estiver em modo de teste, sua conta precisa estar na lista de usu\u00e1rios de teste.</string>
+    <string name="login_google_err_signup">Cadastro de novos usu\u00e1rios est\u00e1 desativado no servidor.</string>
+    <string name="login_google_err_pkce">Falha na valida\u00e7\u00e3o do retorno. Tente novamente.</string>
+    <string name="login_google_err_network">Sem conex\u00e3o com a internet.</string>
+    <string name="login_google_err_generic">N\u00e3o foi poss\u00edvel entrar com Google.</string>
+    <string name="login_google_connecting">Conectando com o Google\u2026</string>
+    <string name="login_google_err_no_account">Nenhuma conta do Google encontrada neste aparelho.</string>
+    <string name="login_google_use_browser">Entrar pelo navegador</string>
+    <string name="login_google_err_client_id">O Web Client ID do app n\u00e3o corresponde ao cadastrado no Google/Supabase. Confira em Authentication \u2192 Providers \u2192 Google no Supabase.</string>
+    <string name="login_google_err_nonce">Falha na valida\u00e7\u00e3o do login (nonce). Tente novamente.</string>
+
+    <!-- Configura\u00e7\u00f5es / sair da conta -->
+    <string name="settings_route_section_title">Mapas e rotas</string>
+    <string name="settings_route_item_title">Rotas</string>
+    <string name="settings_route_item_subtitle">Pesquisar e abrir uma rota no Google Maps</string>
+    <string name="settings_logout_title">Sair da conta?</string>
+    <string name="settings_logout_message">Voc\u00ea precisar\u00e1 entrar novamente para acompanhar sua fam\u00edlia.</string>
+    <string name="settings_logout_confirm">Sair</string>
+    <string name="settings_logout_cancel">Cancelar</string>
+
+    <!-- Pesquisa simples de rotas (Google Maps externo) -->
+    <string name="routes_title">Rotas</string>
+    <string name="routes_origin_label">Origem</string>
+    <string name="routes_origin_current">Minha localiza\u00e7\u00e3o atual</string>
+    <string name="routes_origin_acquiring">Obtendo localiza\u00e7\u00e3o...</string>
+    <string name="routes_origin_address">Endere\u00e7o ou local</string>
+    <string name="routes_destination_label">Destino</string>
+    <string name="routes_dest_place_hint">Local salvo</string>
+    <string name="routes_dest_place_pick">Escolher um local salvo</string>
+    <string name="routes_dest_tip">Dica: toque em um local salvo para preencher o destino.</string>
+    <string name="routes_dest_required">Preencha o destino</string>
+    <string name="routes_origin_required">Preencha a origem</string>
+    <string name="routes_current_ready">Localiza\u00e7\u00e3o dispon\u00edvel</string>
+    <string name="routes_open_maps">Abrir no Google Maps</string>
+    <string name="routes_no_current_location">Localiza\u00e7\u00e3o atual indispon\u00edvel</string>
+    <string name="routes_err_open">N\u00e3o foi poss\u00edvel abrir o Google Maps</string>
+    <string name="routes_err_no_map_app">Nenhum aplicativo de mapas encontrado neste aparelho.</string>
 </resources>

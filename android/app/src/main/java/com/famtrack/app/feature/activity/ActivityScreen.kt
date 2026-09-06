@@ -18,16 +18,24 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import android.content.Context
 import com.famtrack.app.R
 import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.common.AddressOutcome
+import com.famtrack.app.feature.common.AddressResolver
+import com.famtrack.app.feature.places.Place
 import com.famtrack.app.feature.places.PlacesRepository
+import com.famtrack.app.util.isInsideGeofence
 import io.github.jan.supabase.auth.auth
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -46,6 +54,7 @@ fun ActivityScreen(
     onNavigateBack: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val activityRepository = remember { ActivityRepository() }
     val familyRepository = remember { FamilyRepository() }
     val placesRepository = remember { PlacesRepository() }
@@ -54,6 +63,10 @@ fun ActivityScreen(
     var events by remember { mutableStateOf<List<Event>>(emptyList()) }
     var memberNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var placeNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var places by remember { mutableStateOf<List<Place>>(emptyList()) }
+    var eventLocations by remember {
+        mutableStateOf<Map<String, EventLocation>>(emptyMap())
+    }
     var isLoading by remember { mutableStateOf(true) }
     var isLoadingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -88,7 +101,9 @@ fun ActivityScreen(
                 hasMore = memberId == null && page.size == 50
                 memberNames = familyRepository.getFamilyMemberDisplay(fid)
                     .associate { it.user_id to it.display_name }
-                placeNames = placesRepository.getFamilyPlaces(fid)
+                val familyPlaces = placesRepository.getFamilyPlaces(fid)
+                places = familyPlaces
+                placeNames = familyPlaces
                     .associate { (it.id ?: "") to it.name }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -118,6 +133,19 @@ fun ActivityScreen(
     }
 
     LaunchedEffect(familyId, memberId, resolvedFamilyId) { loadFirstPage() }
+
+    // Resolve endereço/place de cada evento com coordenadas, uma única vez por
+    // evento (chave estável). O Geocoder roda fora da recomposition e tem cache.
+    LaunchedEffect(events, places) {
+        val current = eventLocations
+        val missing = events.filter { current.containsKey(eventKey(it)).not() }
+        if (missing.isEmpty()) return@LaunchedEffect
+        val additions = withContext(Dispatchers.IO) {
+            missing.map { event -> eventKey(event) to resolveEventLocation(context, event, places) }
+                .toMap()
+        }
+        eventLocations = current + additions
+    }
 
     val grouped = remember(events) {
         events.groupBy { it.created_at?.substring(0, 10) ?: "desconhecido" }
@@ -220,11 +248,12 @@ fun ActivityScreen(
                                 )
                             }
                             items(dayEvents, key = { it.id ?: "${it.created_at}_${it.member_id}" }) { event ->
+                                val loc = eventLocations[eventKey(event)]
                                 ActivityRow(
                                     event = event,
                                     displayName = memberNames[event.member_id] ?: "Membro",
-                                    placeName = placeNames[event.place_id]
-                                        ?: "${"%.5f".format(event.lat)}, ${"%.5f".format(event.lng)}",
+                                    placeName = loc?.messagePlace,
+                                    locationSubtitle = loc?.subtitle,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
@@ -260,15 +289,28 @@ fun ActivityScreen(
 private fun ActivityRow(
     event: Event,
     displayName: String,
-    placeName: String,
+    placeName: String?,
+    locationSubtitle: String?,
     modifier: Modifier = Modifier
 ) {
     val (icon, tint) = eventIcon(event)
     val actionText = when (event.type) {
-        "ENTER" -> stringResource(R.string.activity_enter, placeName)
-        "EXIT" -> stringResource(R.string.activity_exit, placeName)
-        "SOS" -> stringResource(R.string.activity_sos, placeName)
-        "CHECKIN" -> stringResource(R.string.activity_checkin, placeName)
+        "ENTER" -> when {
+            placeName != null -> stringResource(R.string.activity_enter, placeName)
+            else -> stringResource(R.string.activity_enter_no_loc)
+        }
+        "EXIT" -> when {
+            placeName != null -> stringResource(R.string.activity_exit, placeName)
+            else -> stringResource(R.string.activity_exit_no_loc)
+        }
+        "SOS" -> when {
+            placeName != null -> stringResource(R.string.activity_sos, placeName)
+            else -> stringResource(R.string.activity_sos_no_loc)
+        }
+        "CHECKIN" -> when {
+            placeName != null -> stringResource(R.string.activity_checkin, placeName)
+            else -> stringResource(R.string.activity_checkin_no_loc)
+        }
         "LOW_BATTERY" -> stringResource(R.string.activity_low_battery)
         else -> event.type
     }
@@ -302,6 +344,14 @@ private fun ActivityRow(
                     text = "$displayName $actionText",
                     style = MaterialTheme.typography.bodyMedium
                 )
+                if (locationSubtitle != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = locationSubtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             if (timeLabel.isNotBlank()) {
                 Text(
@@ -312,6 +362,58 @@ private fun ActivityRow(
             }
         }
     }
+}
+
+/**
+ * Localização legível de um evento: o nome a usar na mensagem (mensagem) e o
+ * endereço/indício exibido como subtítulo. Coordenadas só como último recurso.
+ */
+private data class EventLocation(
+    val messagePlace: String?,
+    val subtitle: String?
+)
+
+private fun eventKey(event: Event): String =
+    event.id ?: "${event.created_at}_${event.member_id}"
+
+private fun eventHasCoords(event: Event): Boolean =
+    event.lat != 0.0 || event.lng != 0.0
+
+private suspend fun resolveEventLocation(
+    context: Context,
+    event: Event,
+    places: List<Place>
+): EventLocation {
+    if (!eventHasCoords(event)) return EventLocation(null, null)
+
+    val direct = places.firstOrNull { it.id != null && it.id == event.place_id }
+    val exact = places.firstOrNull {
+        isInsideGeofence(event.lat, event.lng, it.center_lat, it.center_lon, it.radius_meters.toDouble())
+    }
+    val near = places.firstOrNull {
+        isInsideGeofence(
+            event.lat, event.lng, it.center_lat, it.center_lon,
+            it.radius_meters.toDouble() * 1.5
+        )
+    }
+
+    val messagePlace = direct?.name ?: exact?.name ?: near?.name
+
+    var subtitle: String? = null
+    if (messagePlace == null) {
+        subtitle = when (val outcome = AddressResolver.resolve(context, event.lat, event.lng)) {
+            is AddressOutcome.Found -> outcome.text
+            AddressOutcome.NotFound -> context.getString(R.string.address_not_found)
+            AddressOutcome.Unavailable -> context.getString(
+                R.string.address_approx_coords,
+                "%.5f".format(event.lat),
+                "%.5f".format(event.lng)
+            )
+        }
+    } else if (near != null && exact == null) {
+        subtitle = context.getString(R.string.address_near_place, near.name)
+    }
+    return EventLocation(messagePlace, subtitle)
 }
 
 @Composable
