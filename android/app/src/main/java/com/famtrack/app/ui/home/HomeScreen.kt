@@ -168,7 +168,7 @@ fun HomeScreen(
         return
     }
 
-    val tabs = listOf("Mapa", "Historico", "Alertas", "Config")
+    val tabs = listOf("Mapa", "Histórico", "Alertas", "Configurações")
 
     val cameraPositionState = rememberCameraPositionState()
 
@@ -727,7 +727,7 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
-                                "Obtendo localizacao...",
+                                "Obtendo localização…",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -748,7 +748,7 @@ fun HomeScreen(
             ) {
                 Text(
                     text = buildString {
-                        append(familyName ?: "Familia")
+                        append(familyName ?: "Família")
                         append(" • ")
                         append(familyLocations.size)
                         append(if (familyLocations.size == 1) " membro" else " membros")
@@ -767,8 +767,8 @@ fun HomeScreen(
             if (activeSosAlerts.isNotEmpty()) {
                 Card(
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(16.dp),
+                        .align(Alignment.TopStart)
+                        .padding(start = 16.dp, top = 64.dp, end = 16.dp),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.error
@@ -835,7 +835,7 @@ fun HomeScreen(
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 260.dp),
+                    .padding(end = 16.dp, bottom = 188.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {

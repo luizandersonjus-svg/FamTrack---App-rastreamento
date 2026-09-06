@@ -26,6 +26,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +69,9 @@ fun SosButton(
         modifier = modifier
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.error)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "SOS. Segure por 3 segundos para acionar"
+            }
             .drawBehind {
                 val sweep = 360f * progress.coerceIn(0f, 1f)
                 if (sweep > 0f) {
