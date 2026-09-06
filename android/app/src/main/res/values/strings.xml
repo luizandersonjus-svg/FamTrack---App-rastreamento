@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">FamTrack</string>
+    <string name="location_service_notification_title">FamTrack</string>
+    <string name="location_service_notification_text">FamTrack está compartilhando sua localização</string>
     <string name="login">Entrar</string>
     <string name="register">Cadastrar</string>
     <string name="email">Email</string>
@@ -81,7 +83,7 @@
     <string name="onboarding_battery_title">Otimização de bateria</string>
     <string name="onboarding_battery_text">Seu aparelho pode pausar o FamTrack para economizar bateria, e aí a localização para de ser enviada. Vamos desativar isso para o app.</string>
     <string name="onboarding_battery_brand">Instruções para %1$s:</string>
-    <string name="onboarding_battery_samsung">Abra Configurações > Bateria > Limites de uso em segundo plano: deixe "Aplicativos que nunca hibernam" com o FamTrack ativo, e desative "Pausar apps não usados".</string>
+    <string name="onboarding_battery_samsung">Em Samsung: 1) Configurações > Aplicativos > FamTrack > Bateria > "Sem restrições". 2) Configurações > Bateria > Limites de uso em segundo plano > "Apps nunca suspensos" > adicionar o FamTrack. 3) Configurações > Localização > Permissões de app > FamTrack > "Permitir o tempo todo".</string>
     <string name="onboarding_battery_xiaomi">Abra Configurações > Bateria > Economia de energia > Restrições de apps em segundo plano: desative restrições de Bateria e Não poupar para o FamTrack.</string>
     <string name="onboarding_battery_huawei">Abra Gerenciador de aplicativos > Bateria > Início do aplicativo: deixe o FamTrack em "Gerenciar manualmente" com todas as opções ligadas (Auto-start, Atividade secundária e Executar em segundo plano).</string>
     <string name="onboarding_battery_motorola">Abra Configurações > Bateria > Otimização de bateria e escolha "Não otimizar" para o FamTrack.</string>
@@ -130,6 +132,11 @@
     <string name="place_err_permission">Permissão de localização necessária. Autorize nas configurações do app.</string>
     <string name="place_err_location_now">Não foi possível obter sua localização agora.</string>
     <string name="place_err_location_exc">Erro ao obter localização.</string>
+    <string name="place_field_address">Endereço</string>
+    <string name="place_search_hint">Digite um endereço</string>
+    <string name="place_search_action">Buscar endereço</string>
+    <string name="place_err_search_not_found">Endereço não encontrado</string>
+    <string name="place_err_search_network">Erro ao buscar endereço. Verifique a conexão</string>
 
     <!-- Card do membro / detalhe (F2) -->
     <string name="member_status_casa">Em casa</string>
@@ -172,6 +179,7 @@
 
     <!-- SOS / check-in (F5) -->
     <string name="sos_hold_hint">Segure o botão para acionar o SOS</string>
+    <string name="sos_hold_hint_tap">Mantenha pressionado por 3 segundos para ativar o SOS</string>
     <string name="sos_cancel_title">Alerta SOS enviado</string>
     <string name="sos_cancel_text">Sua família foi avisada com sua localização. Você pode cancelar o alerta.</string>
     <string name="sos_cancel_action">Cancelar alerta</string>

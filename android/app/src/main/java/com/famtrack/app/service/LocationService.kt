@@ -12,6 +12,7 @@ import android.hardware.SensorManager
 import android.location.Location
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -45,6 +46,13 @@ class LocationService : Service() {
 
     private var currentFamilyId: String? = null
     private var currentUserId: String? = null
+
+    // Evita registrar o FusedLocationProvider duas vezes (múltiplos ACTION_START).
+    private var trackingStarted = false
+    private var locationCallback: LocationCallback? = null
+    private val servicePrefs by lazy {
+        getSharedPreferences(SERVICE_PREFS, MODE_PRIVATE)
+    }
 
     // Cache local de geofences (evita fetch a cada atualização)
     private var cachedGeofences: List<Geofence> = emptyList()
@@ -111,10 +119,31 @@ class LocationService : Service() {
             ACTION_START -> {
                 currentFamilyId = intent.getStringExtra(EXTRA_FAMILY_ID)
                 currentUserId = intent.getStringExtra(EXTRA_USER_ID)
-                start()
+                persistIds(currentFamilyId, currentUserId)
+                if (currentFamilyId != null && currentUserId != null) {
+                    start()
+                } else {
+                    Log.e(TAG, "ACTION_START sem ids de família/usuário")
+                    stop()
+                }
             }
-            ACTION_STOP -> {
-                stop()
+            ACTION_STOP -> stop()
+            else -> {
+                // Android recriou o processo (START_STICKY) sem intent:
+                // restaura o tracking a partir das preferências persistidas.
+                if (currentFamilyId == null || currentUserId == null) {
+                    restoreIds()?.let { (fid, uid) ->
+                        currentFamilyId = fid
+                        currentUserId = uid
+                    }
+                }
+                if (currentFamilyId != null && currentUserId != null) {
+                    Log.i(TAG, "Serviço recriado pelo sistema; retomando tracking")
+                    start()
+                } else {
+                    Log.e(TAG, "Serviço recriado sem ids válidos; encerrando de forma controlada")
+                    shutdown()
+                }
             }
         }
         return START_STICKY
@@ -123,7 +152,14 @@ class LocationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun start() {
+        if (trackingStarted) {
+            // Já em tracking: apenas reafirma o foreground (evita registrar updates 2x).
+            startForeground(NOTIFICATION_ID, createNotification())
+            return
+        }
+        trackingStarted = true
         val notification = createNotification()
+        // Foreground obrigatório ANTES de qualquer operação de localização/rede.
         startForeground(NOTIFICATION_ID, notification)
         refreshGeofenceCache()
         startGeofenceCacheRefreshLoop()
@@ -132,13 +168,61 @@ class LocationService : Service() {
     }
 
     private fun stop() {
-        unregisterStepSensor()
-        @Suppress("DEPRECATION")
-        stopForeground(true)
+        if (trackingStarted) {
+            trackingStarted = false
+            stopLocationUpdates()
+            unregisterStepSensor()
+        }
+        removeForeground()
+        // Para nesta sessão: impede START_STICKY de retomar tracking contra a vontade do usuário.
+        clearPersistedIds()
         stopSelf()
     }
 
+    private fun shutdown() {
+        if (trackingStarted) {
+            trackingStarted = false
+            stopLocationUpdates()
+            unregisterStepSensor()
+        }
+        removeForeground()
+        stopSelf()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun removeForeground() {
+        try {
+            stopForeground(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha ao remover foreground", e)
+        }
+    }
+
+    private fun persistIds(familyId: String?, userId: String?) {
+        servicePrefs.edit()
+            .putString(KEY_FAMILY_ID, familyId)
+            .putString(KEY_USER_ID, userId)
+            .apply()
+    }
+
+    private fun restoreIds(): Pair<String, String>? {
+        val fid = servicePrefs.getString(KEY_FAMILY_ID, null) ?: return null
+        val uid = servicePrefs.getString(KEY_USER_ID, null) ?: return null
+        return fid to uid
+    }
+
+    private fun clearPersistedIds() {
+        servicePrefs.edit()
+            .remove(KEY_FAMILY_ID)
+            .remove(KEY_USER_ID)
+            .apply()
+    }
+
     private fun startLocationUpdates() {
+        if (locationCallback != null) {
+            // Já registrado (ex.: múltiplos ACTION_START); evita updates duplicados.
+            return
+        }
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
             UPDATE_INTERVAL_MS
@@ -148,27 +232,53 @@ class LocationService : Service() {
             setWaitForAccurateLocation(true)
         }.build()
 
+        if (ContextCompat.checkSelfPermission(
+                this,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.e(TAG, "Permissão de localização ausente; updates não registrados")
+            return
+        }
+
         val locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
                     lastKnownLocation = location
-                    sendLocationToSupabase(location)
-                    saveRoutePoint(location)
+                    // Política de privacidade: pausado, nada é enviado ao backend.
+                    if (!isSharingPaused()) {
+                        sendLocationToSupabase(location)
+                        saveRoutePoint(location)
+                    }
                     checkGeofences(location)
                 }
             }
         }
+        this.locationCallback = locationCallback
 
-        if (ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
+        try {
             locationClient.requestLocationUpdates(
                 locationRequest,
                 locationCallback,
                 Looper.getMainLooper()
             )
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Sem permissão para registrar updates", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha ao registrar location updates", e)
+        }
+    }
+
+    private fun stopLocationUpdates() {
+        locationCallback?.let { callback ->
+            locationCallback = null
+            try {
+                locationClient.removeLocationUpdates(callback)
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Sem permissão ao remover updates", e)
+            } catch (e: Exception) {
+                Log.e(TAG, "Falha ao remover location updates", e)
+            }
         }
     }
 
@@ -197,7 +307,8 @@ class LocationService : Service() {
                 // Upsert: mantém apenas a localização mais recente por (family_id, user_id)
                 locationRepository.upsertLocation(famLocation)
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Falha de rede/Supabase: NÃO para o serviço; tenta de novo no próximo fix.
+                Log.e(TAG, "Falha ao enviar localização ao Supabase", e)
             }
         }
     }
@@ -222,7 +333,7 @@ class LocationService : Service() {
                 )
                 locationRepository.saveRoutePoint(routePoint)
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Falha ao salvar ponto de rota", e)
             }
         }
     }
@@ -233,7 +344,7 @@ class LocationService : Service() {
             try {
                 cachedGeofences = geofenceRepository.getFamilyGeofences(familyId)
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Falha ao atualizar cache de geofences", e)
             }
         }
     }
@@ -305,7 +416,7 @@ class LocationService : Service() {
                     type = "geofence"
                 )
             } catch (e: Exception) {
-                e.printStackTrace()
+                Log.e(TAG, "Falha ao enviar notificação de geofence", e)
             }
         }
     }
@@ -390,16 +501,18 @@ class LocationService : Service() {
         )
 
         return NotificationCompat.Builder(this, FamTrackApp.NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("FamTrack")
-            .setContentText("Compartilhando localizacao...")
+            .setContentTitle(getString(R.string.location_service_notification_title))
+            .setContentText(getString(R.string.location_service_notification_text))
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        stopLocationUpdates()
         unregisterStepSensor()
         serviceScope.cancel()
     }
@@ -409,6 +522,11 @@ class LocationService : Service() {
         const val ACTION_STOP = "ACTION_STOP"
         const val EXTRA_FAMILY_ID = "EXTRA_FAMILY_ID"
         const val EXTRA_USER_ID = "EXTRA_USER_ID"
+
+        private const val TAG = "LocationService"
+        private const val SERVICE_PREFS = "location_service_prefs"
+        private const val KEY_FAMILY_ID = "service_family_id"
+        private const val KEY_USER_ID = "service_user_id"
 
         // Passos acumulados no local atual (lidos pela tela do próprio usuário)
         @Volatile

@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -288,7 +289,7 @@ fun HomeScreen(
                 val bmp = try {
                     java.net.URL(url).openStream().use { stream ->
                         android.graphics.BitmapFactory.decodeStream(stream)?.let {
-                            circularAvatarBitmap(android.graphics.Bitmap.createScaledBitmap(it, 120, 120, true))
+                            android.graphics.Bitmap.createScaledBitmap(it, 120, 120, true)
                         }
                     }
                 } catch (e: Exception) {
@@ -575,120 +576,6 @@ fun HomeScreen(
                 }
             }
         },
-        floatingActionButton = {
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                FloatingActionButton(
-                    onClick = {
-                        currentLocation?.let { (lat, lon) ->
-                            scope.launch {
-                                cameraPositionState.animate(
-                                    CameraUpdateFactory.newLatLngZoom(
-                                        com.google.android.gms.maps.model.LatLng(lat, lon),
-                                        15f
-                                    ),
-                                    500
-                                )
-                            }
-                        }
-                    },
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        Icons.Default.MyLocation,
-                        contentDescription = "Minha localizacao",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                FloatingActionButton(
-                    onClick = onNavigateToGeofence,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        Icons.Default.LocationOn,
-                        contentDescription = "Geofences",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                FloatingActionButton(
-                    onClick = { showCreatePlaceDialog = true },
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        Icons.Default.AddLocation,
-                        contentDescription = "Cadastrar local",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                FloatingActionButton(
-                    onClick = {
-                        if (!checkoutBusy) {
-                            scope.launch {
-                                checkoutBusy = true
-                                try {
-                                    val outcome = CheckInRepository().checkIn(context)
-                                    sosMessage = when (outcome) {
-                                        CheckInOutcome.SUCCESS ->
-                                            context.getString(R.string.checkin_done)
-                                        CheckInOutcome.NO_PERMISSION ->
-                                            context.getString(R.string.checkin_no_perm)
-                                        CheckInOutcome.NO_LOCATION ->
-                                            context.getString(R.string.checkin_no_location)
-                                        CheckInOutcome.TIMEOUT ->
-                                            context.getString(R.string.checkin_timeout)
-                                        CheckInOutcome.ERROR ->
-                                            context.getString(R.string.checkin_fail)
-                                    }
-                                } finally {
-                                    checkoutBusy = false
-                                }
-                            }
-                        }
-                    },
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Check,
-                        contentDescription = stringResource(R.string.checkin_cd),
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                FloatingActionButton(
-                    onClick = triggerSos,
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = Color.White,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .size(64.dp)
-                        .shadow(8.dp, CircleShape)
-                ) {
-                    Text(
-                        "SOS",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
-                }
-            }
-        }
     ) { paddingValues ->
         Box(
             modifier = Modifier
@@ -709,29 +596,52 @@ fun HomeScreen(
                     mapType = MapType.NORMAL
                 )
             ) {
-                familyLocations.forEach { location ->
+                val placedPositions = mutableListOf<android.graphics.Point>()
+                val markerDensity = context.resources.displayMetrics.density
+                val markerPinColor = MaterialTheme.colorScheme.primary.toArgb()
+                familyLocations.forEachIndexed { index, location ->
                     val info = memberInfos[location.user_id]
-                    val avatar = memberAvatars[location.user_id]
+                    val photo = memberAvatars[location.user_id]
                     val isSelf = location.user_id == userId
                     val live = if (isSelf) currentLocation else null
-                    val pos = com.google.android.gms.maps.model.LatLng(
+                    val basePos = com.google.android.gms.maps.model.LatLng(
                         live?.first ?: location.latitude,
                         live?.second ?: location.longitude
                     )
+                    // Deslocamento visual mínimo (estável) só quando coordenadas estão quase iguais.
+                    val baseLatU = (basePos.latitude * 1e6).toInt()
+                    val baseLonU = (basePos.longitude * 1e6).toInt()
+                    val clash = placedPositions.any { p ->
+                        kotlin.math.abs(p.x - baseLatU) < 50 &&
+                            kotlin.math.abs(p.y - baseLonU) < 50
+                    }
+                    placedPositions += android.graphics.Point(baseLatU, baseLonU)
+                    val pos = if (clash) {
+                        val d = 0.00004
+                        com.google.android.gms.maps.model.LatLng(
+                            basePos.latitude + d * ((index % 3) - 1),
+                            basePos.longitude + d * ((index % 2) * 2 - 1)
+                        )
+                    } else {
+                        basePos
+                    }
                     Marker(
                         state = MarkerState(position = pos),
                         title = info?.display_name ?: "Membro",
-                        icon = if (avatar != null) {
-                            com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(avatar)
-                        } else {
-                            com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
-                                com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_AZURE
-                            )
-                        },
-                        anchor = if (avatar != null) {
-                            androidx.compose.ui.geometry.Offset(0.5f, 0.5f)
-                        } else {
-                            androidx.compose.ui.geometry.Offset(0.5f, 1f)
+                        icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
+                            .fromBitmap(
+                                memberMarkerBitmap(
+                                    density = markerDensity,
+                                    name = info?.display_name,
+                                    photo = photo,
+                                    pinColor = markerPinColor
+                                )
+                            ),
+                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 1f),
+                        zIndex = 1f + index,
+                        onClick = {
+                            selectedMember = location
+                            true
                         }
                     )
                 }
@@ -895,14 +805,88 @@ fun HomeScreen(
                 }
             }
 
-            // Botão de SOS com pressionar e segurar (F5)
-            SosButton(
-                onTrigger = triggerSos,
+            // Coluna de controles do mapa (F5): Centralizar, Check-in e SOS.
+            // Posicionada à direita, acima do carrossel de membros.
+            Column(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 80.dp)
-                    .padding(bottom = 8.dp)
-            )
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 260.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                FloatingActionButton(
+                    onClick = {
+                        currentLocation?.let { (lat, lon) ->
+                            scope.launch {
+                                cameraPositionState.animate(
+                                    CameraUpdateFactory.newLatLngZoom(
+                                        com.google.android.gms.maps.model.LatLng(lat, lon),
+                                        15f
+                                    ),
+                                    500
+                                )
+                            }
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    shape = CircleShape,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.MyLocation,
+                        contentDescription = "Minha localizacao",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                FloatingActionButton(
+                    onClick = {
+                        if (!checkoutBusy) {
+                            scope.launch {
+                                checkoutBusy = true
+                                try {
+                                    val outcome = CheckInRepository().checkIn(context)
+                                    sosMessage = when (outcome) {
+                                        CheckInOutcome.SUCCESS ->
+                                            context.getString(R.string.checkin_done)
+                                        CheckInOutcome.NO_PERMISSION ->
+                                            context.getString(R.string.checkin_no_perm)
+                                        CheckInOutcome.NO_LOCATION ->
+                                            context.getString(R.string.checkin_no_location)
+                                        CheckInOutcome.TIMEOUT ->
+                                            context.getString(R.string.checkin_timeout)
+                                        CheckInOutcome.ERROR ->
+                                            context.getString(R.string.checkin_fail)
+                                    }
+                                } finally {
+                                    checkoutBusy = false
+                                }
+                            }
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    shape = CircleShape,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = stringResource(R.string.checkin_cd),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                SosButton(
+                    onTrigger = triggerSos,
+                    onTap = {
+                        sosMessage = context.getString(R.string.sos_hold_hint_tap)
+                    },
+                    modifier = Modifier
+                        .size(64.dp)
+                        .shadow(8.dp, CircleShape)
+                )
+            }
 
             sosMessage?.let { msg ->
                 LaunchedEffect(msg) {
@@ -1125,24 +1109,120 @@ fun CreatePlaceDialog(
     )
 }
 
-private fun circularAvatarBitmap(source: android.graphics.Bitmap): android.graphics.Bitmap {
-    val size = minOf(source.width, source.height)
-    val out = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+private fun memberInitials(name: String?): String =
+    (name ?: "")
+        .trim()
+        .split(Regex("\\s+"))
+        .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+        .take(2)
+        .joinToString("")
+        .ifEmpty { "?" }
+
+/**
+ * Bitmap do marcador de membro: pino/ponta na PARTE INFERIOR, círculo de
+ * fundo, foto de perfil (ou iniciais) por cima e borda branca — o rosto
+ * nunca é coberto pelo pino. anchor do Marker = (0.5f, 1.0f) aponta para a
+ * ponta do pino no lat/lng.
+ * Ordem das camadas (de baixo para cima):
+ *   1. sombra suave do pino
+ *   2. ponta/pin triangular na parte inferior
+ *   3. círculo de fundo branco
+ *   4. foto de perfil recortada em círculo (ou iniciais se não houver foto)
+ *   5. borda branca (3.5dp) ao redor do círculo
+ */
+private fun memberMarkerBitmap(
+    density: Float,
+    name: String?,
+    photo: android.graphics.Bitmap?,
+    pinColor: Int
+): android.graphics.Bitmap {
+    val avatarPx = (48f * density).toInt().coerceAtLeast(1)
+    val tailPx = (14f * density).toInt()
+    val marginPx = (4f * density).toInt()
+    val borderPx = (3.5f * density).coerceAtLeast(2f)
+
+    val width = avatarPx + marginPx * 2
+    val height = marginPx + avatarPx + tailPx
+    val cx = width / 2f
+    val avatarCenterY = marginPx + avatarPx / 2f
+    val avatarR = avatarPx / 2f
+    val tipY = height - 1f
+
+    val out = android.graphics.Bitmap.createBitmap(
+        width, height, android.graphics.Bitmap.Config.ARGB_8888
+    )
     val canvas = android.graphics.Canvas(out)
-    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-    val bounds = android.graphics.RectF(0f, 0f, size.toFloat(), size.toFloat())
-    val path = android.graphics.Path().apply {
-        addOval(bounds, android.graphics.Path.Direction.CW)
+
+    // 1 + 2: sombra suave + ponta/pin triangular (fica atrás do círculo).
+    val pinPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = pinColor
+        setShadowLayer((marginPx * 1.2f).coerceAtLeast(2f), 0f, marginPx * 0.6f, 0x66000000)
     }
-    canvas.save()
-    canvas.clipPath(path)
-    canvas.drawBitmap(source, null, android.graphics.Rect(0, 0, size, size), paint)
-    canvas.restore()
-    val border = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+    val tailPath = android.graphics.Path().apply {
+        moveTo(cx, tipY)
+        quadTo(
+            cx - avatarR * 0.62f, avatarCenterY + avatarR * 0.85f,
+            cx - avatarR * 0.80f, avatarCenterY + avatarR * 0.55f
+        )
+        quadTo(
+            cx + avatarR * 0.80f, avatarCenterY + avatarR * 0.55f,
+            cx + avatarR * 0.62f, avatarCenterY + avatarR * 0.85f
+        )
+        close()
+    }
+    canvas.drawPath(tailPath, pinPaint)
+
+    // 3: círculo de fundo branco sobre a base do pino.
+    val whiteFill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+    }
+    canvas.drawCircle(cx, avatarCenterY, avatarR, whiteFill)
+
+    // 4: foto recortada em círculo (ou iniciais como placeholder).
+    if (photo != null) {
+        val clip = android.graphics.Path().apply {
+            addCircle(cx, avatarCenterY, avatarR - borderPx, android.graphics.Path.Direction.CW)
+        }
+        canvas.save()
+        canvas.clipPath(clip)
+        val size = avatarPx - borderPx.toInt() * 2
+        canvas.drawBitmap(
+            photo,
+            null,
+            android.graphics.Rect(
+                (cx - size / 2f).toInt(),
+                (avatarCenterY - size / 2f).toInt(),
+                (cx + size / 2f).toInt(),
+                (avatarCenterY + size / 2f).toInt()
+            ),
+            android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+        )
+        canvas.restore()
+    } else {
+        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = pinColor
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create(
+                android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD
+            )
+            textSize = avatarPx * 0.46f
+        }
+        val fm = textPaint.fontMetrics
+        canvas.drawText(
+            memberInitials(name),
+            cx,
+            avatarCenterY - (fm.ascent + fm.descent) / 2f,
+            textPaint
+        )
+    }
+
+    // 5: borda branca ao redor do círculo.
+    val borderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         style = android.graphics.Paint.Style.STROKE
         color = android.graphics.Color.WHITE
-        strokeWidth = (size * 0.06f).coerceAtLeast(2f)
+        strokeWidth = borderPx
     }
-    canvas.drawOval(bounds, border)
+    canvas.drawCircle(cx, avatarCenterY, avatarR - borderPx / 2f, borderPaint)
+
     return out
 }

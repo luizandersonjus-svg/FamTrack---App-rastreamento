@@ -2,15 +2,20 @@ package com.famtrack.app.feature.places
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.os.Build
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.famtrack.app.R
@@ -36,7 +42,12 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.rememberCameraPositionState
 import io.github.jan.supabase.auth.auth
+import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /**
  * Criação e edição de um local (F3). O raio pode ser ajustado entre 100 e
@@ -60,6 +71,9 @@ fun PlaceEditScreen(
     var isLoading by remember { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    var addressQuery by remember { mutableStateOf("") }
+    var searchingAddress by remember { mutableStateOf(false) }
 
     var name by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("CASA") }
@@ -93,6 +107,28 @@ fun PlaceEditScreen(
             }
         }.addOnFailureListener {
             errorMessage = it.message ?: context.getString(R.string.place_err_location_exc)
+        }
+    }
+
+    fun searchAddressByQuery() {
+        val query = addressQuery.trim()
+        if (query.isEmpty()) return
+        if (searchingAddress) return
+        scope.launch {
+            searchingAddress = true
+            errorMessage = null
+            when (val result = searchAddress(context, query)) {
+                is AddressSearchResult.Success -> {
+                    lat = result.address.latitude
+                    lng = result.address.longitude
+                    cameraTarget = LatLng(lat, lng)
+                }
+                AddressSearchResult.NotFound ->
+                    errorMessage = context.getString(R.string.place_err_search_not_found)
+                AddressSearchResult.Error ->
+                    errorMessage = context.getString(R.string.place_err_search_network)
+            }
+            searchingAddress = false
         }
     }
 
@@ -286,6 +322,39 @@ fun PlaceEditScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
+                        text = stringResource(R.string.place_field_address),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = addressQuery,
+                        onValueChange = { addressQuery = it },
+                        placeholder = { Text(stringResource(R.string.place_search_hint)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { searchAddressByQuery() }),
+                        trailingIcon = {
+                            if (searchingAddress) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                IconButton(onClick = { searchAddressByQuery() }) {
+                                    Icon(
+                                        Icons.Filled.Search,
+                                        contentDescription = stringResource(R.string.place_search_action)
+                                    )
+                                }
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
                         text = stringResource(R.string.place_field_map),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -455,6 +524,70 @@ fun PlaceEditScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+private sealed class AddressSearchResult {
+    data class Success(val address: android.location.Address) : AddressSearchResult()
+    data object NotFound : AddressSearchResult()
+    data object Error : AddressSearchResult()
+}
+
+/**
+ * Busca de endereço via Geocoder do Android (mesmo padrão de MemberCard).
+ * API 33+ (TIRAMISU): versão assíncrona com GeocodeListener.
+ * Abaixo de 33: versão síncrona deprecada dentro de Dispatchers.IO.
+ */
+private suspend fun searchAddress(
+    context: android.content.Context,
+    query: String
+): AddressSearchResult {
+    val geocoder = Geocoder(context, Locale.getDefault())
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        var errored = false
+        var resumed = false
+        val address: android.location.Address? = try {
+            suspendCancellableCoroutine { cont ->
+                geocoder.getFromLocationName(
+                    query.trim(), 1,
+                    object : Geocoder.GeocodeListener {
+                        override fun onGeocode(addresses: List<android.location.Address>) {
+                            if (!resumed) {
+                                resumed = true
+                                if (cont.isActive) cont.resume(addresses.firstOrNull())
+                            }
+                        }
+
+                        override fun onError(errorMessage: String?) {
+                            if (!resumed) {
+                                resumed = true
+                                errored = true
+                                if (cont.isActive) cont.resume(null)
+                            }
+                        }
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            errored = true
+            null
+        }
+        when {
+            address != null -> AddressSearchResult.Success(address)
+            errored -> AddressSearchResult.Error
+            else -> AddressSearchResult.NotFound
+        }
+    } else {
+        withContext(Dispatchers.IO) {
+            try {
+                @Suppress("DEPRECATION")
+                val address = geocoder.getFromLocationName(query.trim(), 1)?.firstOrNull()
+                if (address != null) AddressSearchResult.Success(address)
+                else AddressSearchResult.NotFound
+            } catch (e: Exception) {
+                AddressSearchResult.Error
             }
         }
     }
