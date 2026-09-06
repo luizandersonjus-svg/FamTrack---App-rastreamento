@@ -102,5 +102,11 @@ data class RoutePoint(
     val user_id: String,
     val latitude: Double,
     val longitude: Double,
-    val recorded_at: String? = null
+    val recorded_at: String? = null,
+    val accuracy: Float? = null,
+    val speed: Float? = null,
+    val bearing: Float? = null,
+    @SerialName("battery_level")
+    val batteryLevel: Int? = null,
+    val provider: String? = null
 )

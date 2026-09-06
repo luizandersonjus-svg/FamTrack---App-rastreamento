@@ -2,6 +2,7 @@ package com.famtrack.app.data.remote
 
 import com.famtrack.app.data.model.Location
 import com.famtrack.app.data.model.RoutePoint
+import android.util.Log
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
 
@@ -68,16 +69,49 @@ class LocationRepository {
     }
 
     /**
-     * Histórico de rota de um usuário em um dia específico (prefixo yyyy-MM-dd).
-     * Retorna os pontos em ordem cronológica.
+     * Histórico de rota de um usuário entre dois instantes (UTC), paginado no servidor.
+     * PostgREST limita a 1.000 linhas por requisição por padrão: pagina até esgotar
+     * ou atingir o teto de segurança. Retorna os pontos em ordem cronológica.
      */
-    suspend fun getRouteHistoryForDay(familyId: String, userId: String, date: String): List<RoutePoint> {
-        return getRouteHistory(familyId, userId)
-            .filter { it.recorded_at?.startsWith(date) == true }
-            .sortedBy { it.recorded_at }
+    suspend fun getRouteHistoryForDay(
+        familyId: String,
+        userId: String,
+        startUtc: String,
+        endUtc: String
+    ): List<RoutePoint> {
+        val points = mutableListOf<RoutePoint>()
+        var from = 0L
+        while (true) {
+            val page = client.from("route_history")
+                .select {
+                    filter {
+                        eq("family_id", familyId)
+                        eq("user_id", userId)
+                        gte("recorded_at", startUtc)
+                        lt("recorded_at", endUtc)
+                    }
+                    order("recorded_at", Order.ASCENDING)
+                    range(from, from + ROUTE_PAGE_SIZE - 1)
+                }
+                .decodeList<RoutePoint>()
+            points += page
+            if (page.size < ROUTE_PAGE_SIZE) break
+            from += ROUTE_PAGE_SIZE
+            if (points.size >= MAX_ROUTE_POINTS_PER_DAY) {
+                Log.w(TAG, "Dia com mais de $MAX_ROUTE_POINTS_PER_DAY pontos; resposta truncada")
+                break
+            }
+        }
+        return points
     }
 
     suspend fun saveRoutePoint(routePoint: RoutePoint) {
         client.from("route_history").insert(routePoint)
+    }
+
+    companion object {
+        private const val TAG = "LocationRepository"
+        private const val ROUTE_PAGE_SIZE = 1000L
+        private const val MAX_ROUTE_POINTS_PER_DAY = 20_000
     }
 }

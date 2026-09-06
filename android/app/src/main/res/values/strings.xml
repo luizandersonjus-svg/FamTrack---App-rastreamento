@@ -232,6 +232,26 @@
     <string name="home_action_places">Locais</string>
     <string name="home_action_activity">Atividade</string>
     <string name="home_action_invite">Convidar</string>
-    <string name="home_action_privacy">Privacidade</string>
-    <string name="sos_notif_fallback">Um membro da família</string>
+<string name="home_action_privacy">Privacidade</string>
+    <string name="sos_notif_fallback">Um membro da fam\u00edlia</string>
+
+    <!-- Hist\u00f3rico de rotas (Fase 1) -->
+    <string name="history_title">Hist\u00f3rico de rotas</string>
+    <string name="history_back">Voltar</string>
+    <string name="history_today">Hoje</string>
+    <string name="history_prev_day">Dia anterior</string>
+    <string name="history_next_day">Pr\u00f3ximo dia</string>
+    <string name="history_date_today_format">Hoje, %1$s</string>
+    <string name="history_limit_note">Hist\u00f3rico dispon\u00edvel por 30 dias</string>
+    <string name="history_picker_ok">OK</string>
+    <string name="history_cancel">Cancelar</string>
+    <string name="history_empty_day">Nenhum deslocamento registrado em %1$s</string>
+    <string name="history_error">Erro ao carregar o hist\u00f3rico</string>
+    <string name="history_retry">Tentar novamente</string>
+    <string name="history_distance_km">%1$s km</string>
+    <string name="history_distance_m">%1$s m</string>
+    <string name="history_period_sep"> \u2013 </string>
+    <string name="history_summary_title">Resumo do dia</string>
+    <string name="history_start_marker">In\u00edcio</string>
+    <string name="history_end_marker">Fim</string>
 </resources>

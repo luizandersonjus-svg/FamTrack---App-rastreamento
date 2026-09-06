@@ -60,6 +60,13 @@ class LocationService : Service() {
     // Última localização conhecida (usada pelo sensor de passos)
     private var lastKnownLocation: Location? = null
 
+    // Amostragem do histórico de rota (Fase 1): último ponto gravado em memória
+    private var lastRouteLat: Double? = null
+    private var lastRouteLng: Double? = null
+    private var lastRouteTime: Long = 0L
+    private var lastRouteBearing: Float = 0f
+    private var hasLastRouteBearing = false
+
     // Sensor de passos (STEP_COUNTER)
     private var sensorManager: SensorManager? = null
     private var stepSensor: Sensor? = null
@@ -319,21 +326,95 @@ class LocationService : Service() {
             .getBoolean("sharing_paused", false)
     }
 
+    /**
+     * Decisão de amostragem: grava apenas pontos relevantes para a forma da rota.
+     * A) primeiro ponto sempre grava;
+     * B) deslocamento real >= max(20m, accuracy) e tempo >= 20s;
+     * C) curva: mudança de rumo > 30°, velocidade > 1 m/s, deslocou >= 10m, tempo >= 5s;
+     * D) permanência: nada gravado há >= 3min (mantém paradas visíveis no resumo);
+     * E) fixes com accuracy > 500m só valem para D.
+     */
+    private fun shouldRecordRoutePoint(location: Location): Boolean {
+        val lastLat = lastRouteLat
+        val lastLng = lastRouteLng
+        if (lastLat == null || lastLng == null) return true
+
+        val elapsed = location.time - lastRouteTime
+        val accuracy = location.accuracy
+        // E) ignora jitter de GPS parado com precisão ruim (regras B/C)
+        val accurate = accuracy <= 0f || accuracy <= ROUTE_MAX_ACCURACY_M
+
+        val distance = FloatArray(1)
+        Location.distanceBetween(
+            lastLat, lastLng,
+            location.latitude, location.longitude,
+            distance
+        )
+        val dist = distance[0].toDouble()
+
+        // B) deslocamento real
+        if (accurate && elapsed >= ROUTE_MIN_TIME_MS
+            && dist >= maxOf(ROUTE_MIN_DISTANCE_FLOOR_M, accuracy.toDouble())
+        ) return true
+
+        // C) curva
+        if (accurate && location.hasBearing() && location.hasSpeed()
+            && location.speed > ROUTE_CURVE_MIN_SPEED_MS
+            && elapsed >= ROUTE_CURVE_MIN_TIME_MS
+            && dist >= ROUTE_CURVE_MIN_DISTANCE_M
+            && (!hasLastRouteBearing ||
+                kotlin.math.abs(bearingDelta(location.bearing, lastRouteBearing)) > ROUTE_CURVE_TURN_DEG)
+        ) return true
+
+        // D) permanência
+        return elapsed >= ROUTE_HEARTBEAT_MS
+    }
+
+    /** Menor diferença angular entre dois rumos, em graus (-180..180). */
+    private fun bearingDelta(a: Float, b: Float): Float {
+        var d = (a - b) % 360f
+        if (d > 180f) d -= 360f
+        if (d < -180f) d += 360f
+        return d
+    }
+
+    /**
+     * Grava um ponto no histórico de rota quando a amostragem decide. Falha de
+     * rede/servidor: Log.w, NÃO atualiza o lastSavedPoint (o próximo fix tenta
+     * de novo) e NUNCA para o serviço nem afeta o feed ao vivo.
+     */
     private fun saveRoutePoint(location: Location) {
         val familyId = currentFamilyId ?: return
         val userId = currentUserId ?: return
 
+        if (!shouldRecordRoutePoint(location)) return
+
         serviceScope.launch {
             try {
+                val rawBattery = (getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager)
+                    ?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                val batteryLevel = rawBattery?.takeIf { it in 0..100 }
                 val routePoint = RoutePoint(
                     family_id = familyId,
                     user_id = userId,
                     latitude = location.latitude,
-                    longitude = location.longitude
+                    longitude = location.longitude,
+                    recorded_at = java.time.Instant.ofEpochMilli(location.time).toString(),
+                    accuracy = location.accuracy.takeIf { it > 0f },
+                    speed = if (location.hasSpeed()) location.speed else null,
+                    bearing = if (location.hasBearing()) location.bearing else null,
+                    batteryLevel = batteryLevel,
+                    provider = location.provider
                 )
                 locationRepository.saveRoutePoint(routePoint)
+                // Sucesso: atualiza o ponto de referência da amostragem.
+                lastRouteLat = location.latitude
+                lastRouteLng = location.longitude
+                lastRouteTime = location.time
+                lastRouteBearing = location.bearing
+                hasLastRouteBearing = location.hasBearing()
             } catch (e: Exception) {
-                Log.e(TAG, "Falha ao salvar ponto de rota", e)
+                Log.w(TAG, "Falha ao gravar ponto de rota (ignorada); próxima amostra tentará de novo", e)
             }
         }
     }
@@ -539,6 +620,16 @@ class LocationService : Service() {
         private const val UPDATE_INTERVAL_MS = 3000L
         private const val MIN_DISTANCE_METERS = 5f
         private const val GEOFENCE_CACHE_REFRESH_MS = 60000L
+
+        // Amostragem do histórico de rota (Fase 1)
+        private const val ROUTE_MIN_DISTANCE_FLOOR_M = 20.0
+        private const val ROUTE_MAX_ACCURACY_M = 500.0
+        private const val ROUTE_MIN_TIME_MS = 20_000L
+        private const val ROUTE_CURVE_TURN_DEG = 30.0
+        private const val ROUTE_CURVE_MIN_DISTANCE_M = 10.0
+        private const val ROUTE_CURVE_MIN_TIME_MS = 5_000L
+        private const val ROUTE_CURVE_MIN_SPEED_MS = 1.0
+        private const val ROUTE_HEARTBEAT_MS = 3 * 60_000L
 
         fun startService(
             context: android.content.Context,
