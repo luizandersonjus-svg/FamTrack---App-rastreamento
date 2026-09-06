@@ -28,6 +28,7 @@ import com.famtrack.app.data.remote.NotificationRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import com.google.android.gms.location.*
 import io.github.jan.supabase.auth.auth
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,7 +38,13 @@ import kotlinx.coroutines.launch
 
 class LocationService : Service() {
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Rede de segurança global: qualquer exceção não capturada dentro das
+    // coroutines do serviço é registrada no Logcat em vez de derrubar o processo.
+    private val serviceScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, throwable ->
+            Log.e(TAG, "Exceção não capturada em coroutine do serviço: ${throwable.localizedMessage}", throwable)
+        }
+    )
     private lateinit var locationClient: FusedLocationProviderClient
     private val locationRepository = LocationRepository()
     private val geofenceRepository = GeofenceRepository()
@@ -75,41 +82,46 @@ class LocationService : Service() {
 
     private val stepListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            if (event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
-            val total = event.values[0].toLong()
-            if (!stepCountInitialized) {
-                stepCountInitialized = true
-                lastStepCount = total
-                return
-            }
-            val delta = (total - lastStepCount).coerceAtLeast(0L)
-            lastStepCount = total
-            if (delta == 0L) return
-
-            // Acumula passos apenas se a última posição estiver dentro de um local conhecido
-            val location = lastKnownLocation ?: return
-            val insidePlace = cachedGeofences
-                .filter { it.active }
-                .firstOrNull { gf ->
-                    val dist = FloatArray(1)
-                    Location.distanceBetween(
-                        location.latitude,
-                        location.longitude,
-                        gf.center_lat,
-                        gf.center_lon,
-                        dist
-                    )
-                    dist[0] <= gf.radius_meters
+            try {
+                if (event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
+                val total = event.values[0].toLong()
+                if (!stepCountInitialized) {
+                    stepCountInitialized = true
+                    lastStepCount = total
+                    return
                 }
-            if (insidePlace != null) {
-                if (currentPlaceName != insidePlace.name) {
-                    currentPlaceName = insidePlace.name
+                val delta = (total - lastStepCount).coerceAtLeast(0L)
+                lastStepCount = total
+                if (delta == 0L) return
+
+                // Acumula passos apenas se a última posição estiver dentro de um local conhecido
+                val location = lastKnownLocation ?: return
+                val insidePlace = cachedGeofences
+                    .filter { it.active }
+                    .firstOrNull { gf ->
+                        val dist = FloatArray(1)
+                        Location.distanceBetween(
+                            location.latitude,
+                            location.longitude,
+                            gf.center_lat,
+                            gf.center_lon,
+                            dist
+                        )
+                        dist[0] <= gf.radius_meters
+                    }
+                if (insidePlace != null) {
+                    if (currentPlaceName != insidePlace.name) {
+                        currentPlaceName = insidePlace.name
+                        currentPlaceSteps = 0
+                    }
+                    currentPlaceSteps += delta.toInt()
+                } else {
+                    currentPlaceName = null
                     currentPlaceSteps = 0
                 }
-                currentPlaceSteps += delta.toInt()
-            } else {
-                currentPlaceName = null
-                currentPlaceSteps = 0
+            } catch (e: Exception) {
+                // Sensor/coordenadas fora do comum: nunca derruba o serviço.
+                Log.e(TAG, "Erro protegido no sensor de passos: ${e.localizedMessage}")
             }
         }
 
@@ -159,19 +171,24 @@ class LocationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun start() {
-        if (trackingStarted) {
-            // Já em tracking: apenas reafirma o foreground (evita registrar updates 2x).
-            startForeground(NOTIFICATION_ID, createNotification())
-            return
+        try {
+            if (trackingStarted) {
+                // Já em tracking: apenas reafirma o foreground (evita registrar updates 2x).
+                startForeground(NOTIFICATION_ID, createNotification())
+                return
+            }
+            trackingStarted = true
+            val notification = createNotification()
+            // Foreground obrigatório ANTES de qualquer operação de localização/rede.
+            startForeground(NOTIFICATION_ID, notification)
+            refreshGeofenceCache()
+            startGeofenceCacheRefreshLoop()
+            startLocationUpdates()
+            registerStepSensor()
+        } catch (e: Exception) {
+            // Hibernação/retomada: nunca deixe a inicialização derrubar o serviço.
+            Log.e(TAG, "Erro protegido ao iniciar tracking: ${e.localizedMessage}")
         }
-        trackingStarted = true
-        val notification = createNotification()
-        // Foreground obrigatório ANTES de qualquer operação de localização/rede.
-        startForeground(NOTIFICATION_ID, notification)
-        refreshGeofenceCache()
-        startGeofenceCacheRefreshLoop()
-        startLocationUpdates()
-        registerStepSensor()
     }
 
     private fun stop() {
@@ -250,14 +267,19 @@ class LocationService : Service() {
 
         val locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let { location ->
-                    lastKnownLocation = location
-                    // Política de privacidade: pausado, nada é enviado ao backend.
-                    if (!isSharingPaused()) {
-                        sendLocationToSupabase(location)
-                        saveRoutePoint(location)
+                try {
+                    result.lastLocation?.let { location ->
+                        lastKnownLocation = location
+                        // Política de privacidade: pausado, nada é enviado ao backend.
+                        if (!isSharingPaused()) {
+                            sendLocationToSupabase(location)
+                            saveRoutePoint(location)
+                        }
+                        checkGeofences(location)
                     }
-                    checkGeofences(location)
+                } catch (e: Exception) {
+                    // Main thread (callback): qualquer inesperado aqui NÃO pode derrubar o app.
+                    Log.e(TAG, "Erro protegido em onLocationResult: ${e.localizedMessage}")
                 }
             }
         }
@@ -329,8 +351,11 @@ class LocationService : Service() {
     /**
      * Decisão de amostragem: grava apenas pontos relevantes para a forma da rota.
      * A) primeiro ponto sempre grava;
-     * B) deslocamento real >= max(20m, accuracy) e tempo >= 20s;
-     * C) curva: mudança de rumo > 30°, velocidade > 1 m/s, deslocou >= 10m, tempo >= 5s;
+     * B) deslocamento real >= max(10m, accuracy) e tempo >= 8s quando em movimento
+     *    (velocidade > 2 m/s — carro/moto/pedestre rápido); parado (< 2 m/s)
+     *    mantém os limiares anteriores (20m / 20s);
+     * C) curva: mudança de rumo > 15° (30° parado), velocidade > 1 m/s,
+     *    deslocou >= 8m, tempo >= 5s;
      * D) permanência: nada gravado há >= 3min (mantém paradas visíveis no resumo);
      * E) fixes com accuracy > 500m só valem para D.
      */
@@ -344,6 +369,14 @@ class LocationService : Service() {
         // E) ignora jitter de GPS parado com precisão ruim (regras B/C)
         val accurate = accuracy <= 0f || accuracy <= ROUTE_MAX_ACCURACY_M
 
+        // Em movimento a amostragem fica mais densa (captura curvas); parado,
+        // mantém as regras da Fase 1 para não acumular pontos inúteis.
+        val moving = location.hasSpeed() && location.speed > ROUTE_MOVING_SPEED_MS
+        val minDist = if (moving) FAST_ROUTE_MIN_DISTANCE_M else ROUTE_MIN_DISTANCE_FLOOR_M
+        val minTime = if (moving) FAST_ROUTE_MIN_TIME_MS else ROUTE_MIN_TIME_MS
+        val turnDeg = if (moving) FAST_CURVE_TURN_DEG else ROUTE_CURVE_TURN_DEG
+        val curveDist = if (moving) FAST_CURVE_MIN_DISTANCE_M else ROUTE_CURVE_MIN_DISTANCE_M
+
         val distance = FloatArray(1)
         Location.distanceBetween(
             lastLat, lastLng,
@@ -353,17 +386,17 @@ class LocationService : Service() {
         val dist = distance[0].toDouble()
 
         // B) deslocamento real
-        if (accurate && elapsed >= ROUTE_MIN_TIME_MS
-            && dist >= maxOf(ROUTE_MIN_DISTANCE_FLOOR_M, accuracy.toDouble())
+        if (accurate && elapsed >= minTime
+            && dist >= maxOf(minDist, accuracy.toDouble())
         ) return true
 
         // C) curva
         if (accurate && location.hasBearing() && location.hasSpeed()
             && location.speed > ROUTE_CURVE_MIN_SPEED_MS
             && elapsed >= ROUTE_CURVE_MIN_TIME_MS
-            && dist >= ROUTE_CURVE_MIN_DISTANCE_M
+            && dist >= curveDist
             && (!hasLastRouteBearing ||
-                kotlin.math.abs(bearingDelta(location.bearing, lastRouteBearing)) > ROUTE_CURVE_TURN_DEG)
+                kotlin.math.abs(bearingDelta(location.bearing, lastRouteBearing)) > turnDeg)
         ) return true
 
         // D) permanência
@@ -387,7 +420,15 @@ class LocationService : Service() {
         val familyId = currentFamilyId ?: return
         val userId = currentUserId ?: return
 
-        if (!shouldRecordRoutePoint(location)) return
+        // Avaliação de amostragem roda na main thread: qualquer falha (ex.:
+        // coordenada inválida em Location.distanceBetween) apenas descarta o ponto.
+        val shouldRecord = try {
+            shouldRecordRoutePoint(location)
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro protegido ao avaliar amostragem; ponto descartado: ${e.localizedMessage}")
+            false
+        }
+        if (!shouldRecord) return
 
         serviceScope.launch {
             try {
@@ -433,8 +474,16 @@ class LocationService : Service() {
     private fun startGeofenceCacheRefreshLoop() {
         serviceScope.launch {
             while (true) {
-                delay(GEOFENCE_CACHE_REFRESH_MS)
-                refreshGeofenceCache()
+                try {
+                    delay(GEOFENCE_CACHE_REFRESH_MS)
+                    refreshGeofenceCache()
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    // Cancelamento coordenado do serviço: propaga em vez de travar o loop.
+                    throw ce
+                } catch (e: Exception) {
+                    // Falha pontual no ciclo (rede/banco): loga e segue para a próxima rodada.
+                    Log.e(TAG, "Falha protegida no refresh de geofences (continuando): ${e.localizedMessage}")
+                }
             }
         }
     }
@@ -448,6 +497,9 @@ class LocationService : Service() {
                 val activeGeofences = cachedGeofences.filter { it.active }
 
                 for (geofence in activeGeofences) {
+                    // Defensivo: geofence sem id não pode ser avaliada nem transicionada.
+                    val geofenceId = geofence.id ?: continue
+
                     val distance = FloatArray(1)
                     Location.distanceBetween(
                         location.latitude,
@@ -458,24 +510,25 @@ class LocationService : Service() {
                     )
 
                     val isInside = distance[0] <= geofence.radius_meters
-                    val wasInside = isUserInsideGeofence(userId, geofence.id!!)
+                    val wasInside = isUserInsideGeofence(userId, geofenceId)
 
                     if (!wasInside && isInside) {
                         val title = geofence.name
                         val message = "Chegou em: ${geofence.name}"
-                        sendGeofenceNotification(title, message, geofence.id.hashCode())
+                        sendGeofenceNotification(title, message, geofenceId.hashCode())
                         insertGeofenceNotification(familyId, userId, title, message)
                     } else if (wasInside && !isInside) {
                         val title = geofence.name
                         val message = "Saiu de: ${geofence.name}"
-                        sendGeofenceNotification(title, message, geofence.id.hashCode() + 1)
+                        sendGeofenceNotification(title, message, geofenceId.hashCode() + 1)
                         insertGeofenceNotification(familyId, userId, title, message)
                     }
 
-                    updateGeofenceState(userId, geofence.id, isInside)
+                    updateGeofenceState(userId, geofenceId, isInside)
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Nunca crasha por falha de rede/banco/estado na avaliação de geofences.
+                Log.e(TAG, "Falha protegida na avaliação de geofences: ${e.localizedMessage}")
             }
         }
     }
@@ -630,6 +683,14 @@ class LocationService : Service() {
         private const val ROUTE_CURVE_MIN_TIME_MS = 5_000L
         private const val ROUTE_CURVE_MIN_SPEED_MS = 1.0
         private const val ROUTE_HEARTBEAT_MS = 3 * 60_000L
+
+        // Limiares densos quando em movimento (velocidade > 2 m/s): mais pontos
+        // em alta velocidade para desenhar curvas sem o efeito "linha reta".
+        private const val ROUTE_MOVING_SPEED_MS = 2.0
+        private const val FAST_ROUTE_MIN_DISTANCE_M = 10.0
+        private const val FAST_ROUTE_MIN_TIME_MS = 8_000L
+        private const val FAST_CURVE_TURN_DEG = 15.0
+        private const val FAST_CURVE_MIN_DISTANCE_M = 8.0
 
         fun startService(
             context: android.content.Context,

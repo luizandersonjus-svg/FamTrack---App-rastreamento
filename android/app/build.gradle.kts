@@ -91,8 +91,9 @@ dependencies {
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("io.github.jan-tennert.supabase:realtime-kt")
 
-    // Ktor (required by supabase-kt)
-    implementation("io.ktor:ktor-client-cio:3.4.0")
+    // Ktor (required by supabase-kt) — 3.4.1+ corrige KTOR-9348: decoders base64
+    // aceitam padding opcional, evitando crash do realtime com JWT sem padding.
+    implementation("io.ktor:ktor-client-cio:3.4.1")
 
     // Google Maps
     implementation("com.google.android.gms:play-services-maps:19.1.0")

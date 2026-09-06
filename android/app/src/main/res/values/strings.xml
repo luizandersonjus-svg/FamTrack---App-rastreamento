@@ -254,4 +254,15 @@
     <string name="history_summary_title">Resumo do dia</string>
     <string name="history_start_marker">In\u00edcio</string>
     <string name="history_end_marker">Fim</string>
+
+    <!-- Reprodução do trajeto (RoutePlayback) -->
+    <string name="playback_button">Reproduzir trajeto</string>
+    <string name="playback_play">Reproduzir</string>
+    <string name="playback_pause">Pausar</string>
+    <string name="playback_restart">Reiniciar</string>
+    <string name="playback_follow_on">Seguir avatar</string>
+    <string name="playback_follow_off">Parar de seguir</string>
+    <string name="playback_finished">Fim do trajeto</string>
+    <string name="playback_stopped">Parado por %1$s min</string>
+    <string name="playback_insufficient">Trajeto insuficiente para reprodu\u00e7\u00e3o</string>
 </resources>

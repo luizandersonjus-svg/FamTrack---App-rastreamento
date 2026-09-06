@@ -297,6 +297,17 @@ fun HistoryScreen(
 
                     val totalDistance = computeTotalDistance(orderedPoints)
 
+                    val displayLatLngs = remember(displayPoints) {
+                        displayPoints.map { LatLng(it.latitude, it.longitude) }
+                    }
+                    val playback = rememberRoutePlayback(
+                        points = displayPoints,
+                        displayLatLngs = displayLatLngs,
+                        memberName = selectedMemberId?.let { nameById[it] },
+                        avatarColor = MaterialTheme.colorScheme.primary
+                    )
+                    var showPlayback by remember { mutableStateOf(false) }
+
                     // Enquadra a rota do dia (LatLngBounds); ponto único vira zoom fixo.
                     LaunchedEffect(orderedPoints) {
                         if (orderedPoints.isNotEmpty()) {
@@ -311,59 +322,92 @@ fun HistoryScreen(
                     Column(
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        GoogleMap(
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .fillMaxHeight(0.5f),
-                            cameraPositionState = cameraPositionState,
-                            properties = MapProperties(mapType = MapType.NORMAL)
+                                .fillMaxHeight(0.5f)
                         ) {
-                            val displayLatLngs = displayPoints.map { LatLng(it.latitude, it.longitude) }
-                            if (displayLatLngs.size >= 2) {
-                                Polyline(
-                                    points = displayLatLngs,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    width = 6f
-                                )
-                            }
-                            orderedPoints.firstOrNull()?.let { first ->
-                                Marker(
-                                    state = MarkerState(position = LatLng(first.latitude, first.longitude)),
-                                    title = stringResource(R.string.history_start_marker),
-                                    icon = BitmapDescriptorFactory.defaultMarker(
-                                        BitmapDescriptorFactory.HUE_GREEN
+                            GoogleMap(
+                                modifier = Modifier.fillMaxSize(),
+                                cameraPositionState = cameraPositionState,
+                                properties = MapProperties(mapType = MapType.NORMAL)
+                            ) {
+                                if (displayLatLngs.size >= 2) {
+                                    Polyline(
+                                        points = displayLatLngs,
+                                        color = MaterialTheme.colorScheme.primary.copy(
+                                            alpha = if (showPlayback) 0.35f else 1f
+                                        ),
+                                        width = 6f
                                     )
-                                )
-                            }
-                            if (orderedPoints.size > 1) {
-                                orderedPoints.lastOrNull()?.let { last ->
+                                }
+                                orderedPoints.firstOrNull()?.let { first ->
                                     Marker(
-                                        state = MarkerState(position = LatLng(last.latitude, last.longitude)),
-                                        title = stringResource(R.string.history_end_marker),
+                                        state = MarkerState(position = LatLng(first.latitude, first.longitude)),
+                                        title = stringResource(R.string.history_start_marker),
                                         icon = BitmapDescriptorFactory.defaultMarker(
-                                            BitmapDescriptorFactory.HUE_RED
+                                            BitmapDescriptorFactory.HUE_GREEN
                                         )
                                     )
                                 }
-                            }
-                            geofences.forEach { gf ->
-                                val center = LatLng(gf.center_lat, gf.center_lon)
-                                val strokeColor = try {
-                                    Color(android.graphics.Color.parseColor(gf.color))
-                                } catch (e: Exception) {
-                                    Color.Red
+                                if (orderedPoints.size > 1) {
+                                    orderedPoints.lastOrNull()?.let { last ->
+                                        Marker(
+                                            state = MarkerState(position = LatLng(last.latitude, last.longitude)),
+                                            title = stringResource(R.string.history_end_marker),
+                                            icon = BitmapDescriptorFactory.defaultMarker(
+                                                BitmapDescriptorFactory.HUE_RED
+                                            )
+                                        )
+                                    }
                                 }
-                                Circle(
-                                    center = center,
-                                    radius = gf.radius_meters,
-                                    strokeColor = strokeColor,
-                                    fillColor = strokeColor.copy(alpha = 0.25f),
-                                    strokeWidth = 3f
+                                geofences.forEach { gf ->
+                                    val center = LatLng(gf.center_lat, gf.center_lon)
+                                    val strokeColor = try {
+                                        Color(android.graphics.Color.parseColor(gf.color))
+                                    } catch (e: Exception) {
+                                        Color.Red
+                                    }
+                                    Circle(
+                                        center = center,
+                                        radius = gf.radius_meters,
+                                        strokeColor = strokeColor,
+                                        fillColor = strokeColor.copy(alpha = 0.25f),
+                                        strokeWidth = 3f
+                                    )
+                                    Marker(
+                                        state = MarkerState(position = center),
+                                        title = gf.name
+                                    )
+                                }
+                                if (showPlayback && playback.hasRoute) {
+                                    PlaybackMapLayers(
+                                        controller = playback,
+                                        primaryColor = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            if (showPlayback && playback.hasRoute) {
+                                RoutePlaybackEngine(playback)
+                                RoutePlaybackCameraFollow(playback, cameraPositionState)
+                            }
+                            if (showPlayback) {
+                                RoutePlaybackControls(
+                                    controller = playback,
+                                    modifier = Modifier.align(Alignment.BottomCenter)
                                 )
-                                Marker(
-                                    state = MarkerState(position = center),
-                                    title = gf.name
-                                )
+                            } else {
+                                Button(
+                                    onClick = {
+                                        showPlayback = true
+                                        playback.togglePlayPause()
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .padding(12.dp)
+                                ) {
+                                    Text(stringResource(R.string.playback_button))
+                                }
                             }
                         }
                         Column(
