@@ -20,7 +20,9 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,7 +53,8 @@ data class MemberCardInfo(
     val statusText: String,
     val batteryLevel: Int?,
     val lastUpdatedMillis: Long?,
-    val sharingPaused: Boolean
+    val sharingPaused: Boolean,
+    val isSelf: Boolean = false
 )
 
 /** Tempo desde a última atualização em texto humano ("há X min"). */
@@ -79,7 +82,8 @@ fun batteryIcon(level: Int): ImageVector {
 /**
  * Card de membro com foto (ou iniciais), status humano, tempo da última
  * atualização e bateria (alerta abaixo de 20%). Esmaece se a última
- * atualização for mais antiga que 60 minutos.
+ * atualização for mais antiga que 60 minutos, exceto para o próprio usuário.
+ * Sem última atualização, mostra "Aguardando primeira atualização".
  */
 @Composable
 fun MemberCard(
@@ -88,9 +92,10 @@ fun MemberCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val stale = info.lastUpdatedMillis?.let {
+    val stale = !info.isSelf && info.lastUpdatedMillis?.let {
         System.currentTimeMillis() - it > 60 * 60 * 1000L
     } ?: false
+    val waitingFirstUpdate = !info.sharingPaused && info.lastUpdatedMillis == null
 
     Card(
         onClick = onClick,
@@ -111,11 +116,28 @@ fun MemberCard(
             )
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = info.displayName,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = info.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (info.isSelf) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Text(
+                                text = stringResource(R.string.member_you_badge),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 if (info.sharingPaused) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -137,11 +159,19 @@ fun MemberCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(
-                        text = lastUpdateLabel(context, info.lastUpdatedMillis),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (waitingFirstUpdate) {
+                        Text(
+                            text = stringResource(R.string.member_waiting_first_update),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            text = lastUpdateLabel(context, info.lastUpdatedMillis),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             info.batteryLevel?.let { level ->

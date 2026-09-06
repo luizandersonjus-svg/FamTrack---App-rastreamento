@@ -796,8 +796,12 @@ fun HomeScreen(
                 }
             }
 
-            // Cards dos membros (F2/F3/F7) no rodapé do mapa
+            // Cards dos membros (F2/F3/F7) no rodapé do mapa.
+            // O usuário atual aparece primeiro, com o selo "Você" no card.
             if (familyLocations.isNotEmpty()) {
+                val carouselOrder = remember(familyLocations, userId) {
+                    familyLocations.sortedBy { it.user_id != userId }
+                }
                 LazyRow(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -806,7 +810,7 @@ fun HomeScreen(
                         .padding(bottom = 92.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(familyLocations, key = { it.user_id }) { loc ->
+                    items(carouselOrder, key = { it.user_id }) { loc ->
                         val info = memberInfos[loc.user_id]
                         MemberCard(
                             info = MemberCardInfo(
@@ -816,7 +820,8 @@ fun HomeScreen(
                                 statusText = memberStatuses[loc.user_id] ?: "",
                                 batteryLevel = loc.batteryLevel,
                                 lastUpdatedMillis = loc.lastUpdatedAt,
-                                sharingPaused = flagByMember[loc.user_id]?.sharing_paused == true
+                                sharingPaused = flagByMember[loc.user_id]?.sharing_paused == true,
+                                isSelf = loc.user_id == userId
                             ),
                             onClick = { selectedMember = loc },
                             modifier = Modifier.width(240.dp)

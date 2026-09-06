@@ -3,6 +3,7 @@ package com.famtrack.app.feature.places
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.common.ErrorMessages
 import io.github.jan.supabase.postgrest.from
 
 /**
@@ -25,7 +26,7 @@ class PlacesRepository {
                 )
             ).id
         } catch (e: Exception) {
-            e.printStackTrace()
+            ErrorMessages.logSafe(e, "registrar geofence")
             null
         }
     }
@@ -35,7 +36,7 @@ class PlacesRepository {
             geofenceRepository.linkPlaceToGeofence(geofenceId, placeId)
             true
         } catch (e: Exception) {
-            e.printStackTrace()
+            ErrorMessages.logSafe(e, "vincular geofence")
             false
         }
     }
@@ -47,7 +48,7 @@ class PlacesRepository {
                 .decodeSingle<Place>()
                 .id
         } catch (e: Exception) {
-            e.printStackTrace()
+            ErrorMessages.logSafe(e, "inserir place")
             null
         } ?: return null
         val geofenceId = registerGeofence(SupabaseClient.getInstance(), place)
@@ -61,7 +62,7 @@ class PlacesRepository {
                             }
                         }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    ErrorMessages.logSafe(e, "rollback place")
                 }
                 return null
             }
@@ -86,7 +87,7 @@ class PlacesRepository {
         try {
             geofenceRepository.deleteGeofence(geofenceId)
         } catch (e: Exception) {
-            e.printStackTrace()
+            ErrorMessages.logSafe(e, "remover geofence")
         }
     }
 
@@ -113,7 +114,7 @@ class PlacesRepository {
                     )
                 )
             } catch (e: Exception) {
-                e.printStackTrace()
+                ErrorMessages.logSafe(e, "atualizar geofence")
             }
         }
     }
@@ -128,7 +129,7 @@ class PlacesRepository {
                     }
                 }
         } catch (e: Exception) {
-            e.printStackTrace()
+            ErrorMessages.logSafe(e, "excluir place")
         }
     }
 }

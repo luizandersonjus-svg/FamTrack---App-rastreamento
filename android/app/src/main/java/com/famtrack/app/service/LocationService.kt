@@ -352,7 +352,7 @@ class LocationService : Service() {
      * Decisão de amostragem: grava apenas pontos relevantes para a forma da rota.
      * A) primeiro ponto sempre grava;
      * B) deslocamento real >= max(10m, accuracy) e tempo >= 8s quando em movimento
-     *    (velocidade > 2 m/s — carro/moto/pedestre rápido); parado (< 2 m/s)
+     *    (velocidade > 1 m/s — caminhada/veículo); parado (< 1 m/s)
      *    mantém os limiares anteriores (20m / 20s);
      * C) curva: mudança de rumo > 15° (30° parado), velocidade > 1 m/s,
      *    deslocou >= 8m, tempo >= 5s;
@@ -447,15 +447,27 @@ class LocationService : Service() {
                     batteryLevel = batteryLevel,
                     provider = location.provider
                 )
-                locationRepository.saveRoutePoint(routePoint)
-                // Sucesso: atualiza o ponto de referência da amostragem.
-                lastRouteLat = location.latitude
-                lastRouteLng = location.longitude
-                lastRouteTime = location.time
-                lastRouteBearing = location.bearing
-                hasLastRouteBearing = location.hasBearing()
+                val saved = locationRepository.saveRoutePoint(routePoint)
+                // Sucesso (insert completo ou fallback legado): atualiza o ponto de
+                // referência da amostragem para o próximo fix continuar a rota.
+                if (saved) {
+                    lastRouteLat = location.latitude
+                    lastRouteLng = location.longitude
+                    lastRouteTime = location.time
+                    lastRouteBearing = location.bearing
+                    hasLastRouteBearing = location.hasBearing()
+                } else {
+                    Log.w(
+                        ROUTE_HISTORY_TAG,
+                        "Ponto de rota descartado: insert completo e fallback legado falharam"
+                    )
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Falha ao gravar ponto de rota (ignorada); próxima amostra tentará de novo", e)
+                Log.w(
+                    ROUTE_HISTORY_TAG,
+                    "Falha ao gravar ponto de rota (ignorada); próxima amostra tentará de novo",
+                    e
+                )
             }
         }
     }
@@ -658,6 +670,7 @@ class LocationService : Service() {
         const val EXTRA_USER_ID = "EXTRA_USER_ID"
 
         private const val TAG = "LocationService"
+        private const val ROUTE_HISTORY_TAG = "FamTrackRouteHistory"
         private const val SERVICE_PREFS = "location_service_prefs"
         private const val KEY_FAMILY_ID = "service_family_id"
         private const val KEY_USER_ID = "service_user_id"
@@ -684,9 +697,11 @@ class LocationService : Service() {
         private const val ROUTE_CURVE_MIN_SPEED_MS = 1.0
         private const val ROUTE_HEARTBEAT_MS = 3 * 60_000L
 
-        // Limiares densos quando em movimento (velocidade > 2 m/s): mais pontos
-        // em alta velocidade para desenhar curvas sem o efeito "linha reta".
-        private const val ROUTE_MOVING_SPEED_MS = 2.0
+        // Limiares densos quando em movimento (velocidade > 1 m/s): mais pontos
+        // em deslocamento para desenhar curvas sem o efeito "linha reta". Caminhada
+        // normal (≈1,4 m/s) é tratada como movimento para o percurso curto não ser
+        // descartado integralmente pelos limiares de parado.
+        private const val ROUTE_MOVING_SPEED_MS = 1.0
         private const val FAST_ROUTE_MIN_DISTANCE_M = 10.0
         private const val FAST_ROUTE_MIN_TIME_MS = 8_000L
         private const val FAST_CURVE_TURN_DEG = 15.0

@@ -114,26 +114,47 @@ fun RouteSearchScreen(onNavigateBack: () -> Unit) {
 
         // Cascata de tentativas (sem pré-verificação: package visibility filtra
         // getPackageInfo/resolveActivity no Android 11+):
-        // 1) Google Maps explícito  2) intent implícita  3) esquema geo.
+        // 1) Google Maps explícito  2) intent implícita  3) navegador
+        // 4) esquema geo.
         val targets = listOf(
-            Intent(Intent.ACTION_VIEW, mapsUri).apply {
-                setPackage(MAPS_PACKAGE_NAME)
-            },
-            Intent(Intent.ACTION_VIEW, mapsUri),
-            Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$destinationEncoded"))
+            Triple(
+                Intent(Intent.ACTION_VIEW, mapsUri).apply {
+                    setPackage(MAPS_PACKAGE_NAME)
+                },
+                R.string.routes_opening_google_maps,
+                "Google Maps"
+            ),
+            Triple(
+                Intent(Intent.ACTION_VIEW, mapsUri),
+                R.string.routes_opening_google_maps,
+                "Intent implícita"
+            ),
+            Triple(
+                Intent(Intent.ACTION_VIEW, mapsUri).apply {
+                    addCategory(Intent.CATEGORY_BROWSABLE)
+                },
+                R.string.routes_opening_browser,
+                "Navegador"
+            ),
+            Triple(
+                Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$destinationEncoded")),
+                R.string.routes_opening_google_maps,
+                "geo"
+            )
         )
         var started = false
-        targets.forEachIndexed { index, intent ->
+        targets.forEachIndexed { index, (intent, successRes, label) ->
             if (!started) {
                 try {
                     context.startActivity(intent)
                     started = true
+                    toast(context.getString(successRes))
                 } catch (e: ActivityNotFoundException) {
-                    Log.w(TAG, "Tentativa $index (ActivityNotFoundException)", e)
+                    Log.w(TAG, "Tentativa $index ($label): ActivityNotFoundException", e)
                 } catch (e: SecurityException) {
-                    Log.w(TAG, "Tentativa $index (SecurityException)", e)
+                    Log.w(TAG, "Tentativa $index ($label): SecurityException", e)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Tentativa $index (Exception)", e)
+                    Log.w(TAG, "Tentativa $index ($label): Exception", e)
                 }
             }
         }

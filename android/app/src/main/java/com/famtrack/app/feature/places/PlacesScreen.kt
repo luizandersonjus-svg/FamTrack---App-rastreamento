@@ -7,9 +7,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Church
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LocalGroceryStore
+import androidx.compose.material.icons.filled.LocalMall
+import androidx.compose.material.icons.filled.LocalPharmacy
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.*
@@ -17,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -24,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.famtrack.app.R
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.common.ErrorMessages
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
 
@@ -33,6 +41,12 @@ fun placeTypeLabel(type: String): String = stringResource(
         "CASA" -> R.string.place_type_casa
         "ESCOLA" -> R.string.place_type_escola
         "TRABALHO" -> R.string.place_type_trabalho
+        "IGRJA" -> R.string.place_type_igreja
+        "MERCADO" -> R.string.place_type_mercado
+        "RESTAURANTE" -> R.string.place_type_restaurante
+        "FARMACIA" -> R.string.place_type_farmacia
+        "ACADEMIA" -> R.string.place_type_academia
+        "SHOPPING" -> R.string.place_type_shopping
         else -> R.string.place_type_outro
     }
 )
@@ -42,6 +56,12 @@ fun placeTypeIcon(type: String): ImageVector = when (type) {
     "CASA" -> Icons.Filled.Home
     "ESCOLA" -> Icons.Filled.School
     "TRABALHO" -> Icons.Filled.Work
+    "IGRJA" -> Icons.Filled.Church
+    "MERCADO" -> Icons.Filled.LocalGroceryStore
+    "RESTAURANTE" -> Icons.Filled.Restaurant
+    "FARMACIA" -> Icons.Filled.LocalPharmacy
+    "ACADEMIA" -> Icons.Filled.FitnessCenter
+    "SHOPPING" -> Icons.Filled.LocalMall
     else -> Icons.Filled.Place
 }
 
@@ -58,6 +78,7 @@ fun PlacesScreen(
     val scope = rememberCoroutineScope()
     val repository = remember { PlacesRepository() }
     val familyRepository = remember { com.famtrack.app.data.remote.FamilyRepository() }
+    val context = LocalContext.current
 
     var places by remember { mutableStateOf<List<Place>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -78,7 +99,7 @@ fun PlacesScreen(
                     }
                 }
             } catch (e: Exception) {
-                error = e.message ?: "Erro ao carregar locais"
+                error = ErrorMessages.friendly(context, e, R.string.place_err_load)
             } finally {
                 isLoading = false
             }
@@ -237,7 +258,7 @@ fun PlacesScreen(
                                                     repository.deletePlace(place)
                                                     places = places.filter { it.id != place.id }
                                                 } catch (e: Exception) {
-                                                    e.printStackTrace()
+                                                    ErrorMessages.logSafe(e, "excluir place da lista")
                                                 }
                                             }
                                         }

@@ -186,6 +186,15 @@ internal class RoutePlaybackController internal constructor(
         }
     }
 
+    /** Conclui a reprodução (execução única, sem loop): para e volta o avatar ao início. */
+    fun finish() {
+        isPlaying = false
+        finished = true
+        stopMessage = null
+        progress = 0f
+        if (hasRoute) avatarMarker.position = positionFor(0f)
+    }
+
     fun restart() {
         if (!hasRoute) return
         isPlaying = false
@@ -259,8 +268,7 @@ internal fun RoutePlaybackEngine(controller: RoutePlaybackController) {
                 }
             }
             if (controller.progress >= 1f) {
-                controller.finished = true
-                controller.isPlaying = false
+                controller.finish()
                 return@LaunchedEffect
             }
         }

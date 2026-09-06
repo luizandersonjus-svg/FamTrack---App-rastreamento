@@ -53,6 +53,17 @@ fun SettingsScreen(
     var showDevicesDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
 
+    // Conta logada no momento (nome do Google/salto, e-mail)
+    val currentUser = remember {
+        SupabaseClient.getInstance().auth.currentUserOrNull()?.let { u ->
+            CurrentAccount(
+                displayName = u.userMetadata?.get("full_name")?.toString()
+                    ?: u.userMetadata?.get("name")?.toString(),
+                email = u.email
+            )
+        }
+    }
+
     if (showProfileDialog) {
         ProfileDialog(onDismiss = { showProfileDialog = false })
     }
@@ -128,6 +139,44 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
+
+            // Conta atualmente logada (nome, e-mail) + ação de sair
+            currentUser?.let { account ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp)),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = account.displayName ?: stringResource(R.string.settings_current_account_unknown),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (account.email != null) {
+                                    Text(
+                                        text = account.email,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            TextButton(onClick = { showLogoutDialog = true }) {
+                                Text(
+                                    text = stringResource(R.string.settings_logout_confirm),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
             Card(
                 modifier = Modifier
@@ -865,3 +914,9 @@ fun DevicesDialog(onDismiss: () -> Unit) {
         }
     )
 }
+
+/** Conta logada exibida no topo da tela de Configurações. */
+private data class CurrentAccount(
+    val displayName: String?,
+    val email: String?
+)

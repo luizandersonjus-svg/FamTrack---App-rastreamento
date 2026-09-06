@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.location.Geocoder
 import android.os.Build
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,7 +22,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -30,6 +33,7 @@ import androidx.core.content.ContextCompat
 import com.famtrack.app.R
 import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.common.ErrorMessages
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.LatLng
@@ -106,7 +110,7 @@ fun PlaceEditScreen(
                 errorMessage = context.getString(R.string.place_err_location_now)
             }
         }.addOnFailureListener {
-            errorMessage = it.message ?: context.getString(R.string.place_err_location_exc)
+            errorMessage = context.getString(R.string.place_err_location_exc)
         }
     }
 
@@ -164,7 +168,7 @@ fun PlaceEditScreen(
                 cameraTarget = LatLng(lat, lng)
             }
         } catch (e: Exception) {
-            errorMessage = e.message ?: context.getString(R.string.place_err_load)
+            errorMessage = ErrorMessages.friendly(context, e, R.string.place_err_load)
         } finally {
             isLoading = false
         }
@@ -226,7 +230,7 @@ fun PlaceEditScreen(
                 }
                 onSaved()
             } catch (e: Exception) {
-                errorMessage = e.message ?: context.getString(R.string.place_err_save)
+                errorMessage = ErrorMessages.friendly(context, e, R.string.place_err_save)
             } finally {
                 saving = false
             }
@@ -241,7 +245,7 @@ fun PlaceEditScreen(
                 repository.deletePlace(place)
                 onSaved()
             } catch (e: Exception) {
-                errorMessage = e.message ?: context.getString(R.string.place_err_delete)
+                errorMessage = ErrorMessages.friendly(context, e, R.string.place_err_delete)
             } finally {
                 saving = false
             }
@@ -310,12 +314,30 @@ fun PlaceEditScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("CASA", "ESCOLA", "TRABALHO", "OUTRO").forEach { t ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            "CASA", "ESCOLA", "TRABALHO", "IGRJA", "MERCADO",
+                            "RESTAURANTE", "FARMACIA", "ACADEMIA", "SHOPPING", "OUTRO"
+                        ).forEach { t ->
                             FilterChip(
                                 selected = type == t,
                                 onClick = { type = t },
-                                label = { Text(placeTypeLabel(t)) }
+                                label = { Text(placeTypeLabel(t)) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = placeTypeIcon(t),
+                                        contentDescription = stringResource(
+                                            R.string.place_type_icon_cd,
+                                            placeTypeLabel(t)
+                                        ),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             )
                         }
                     }
@@ -389,9 +411,16 @@ fun PlaceEditScreen(
                                 fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                                 strokeWidth = 3f
                             )
+                            val markerIcon = placeIconDescriptor(
+                                name = name,
+                                type = type,
+                                tint = MaterialTheme.colorScheme.primary.toArgb(),
+                                densityFloat = LocalDensity.current.density
+                            )
                             Marker(
                                 state = MarkerState(position = center),
-                                title = stringResource(R.string.place_marker_hint)
+                                title = stringResource(R.string.place_marker_hint),
+                                icon = markerIcon
                             )
                         }
                     }

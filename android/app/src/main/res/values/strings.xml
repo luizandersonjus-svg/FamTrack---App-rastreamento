@@ -104,7 +104,14 @@
     <string name="place_type_casa">Casa</string>
     <string name="place_type_escola">Escola</string>
     <string name="place_type_trabalho">Trabalho</string>
+    <string name="place_type_igreja">Igreja</string>
+    <string name="place_type_mercado">Mercado</string>
+    <string name="place_type_restaurante">Restaurante</string>
+    <string name="place_type_farmacia">Farm\u00e1cia</string>
+    <string name="place_type_academia">Academia</string>
+    <string name="place_type_shopping">Shopping</string>
     <string name="place_type_outro">Outro</string>
+    <string name="place_type_icon_cd">Ícone do tipo %1$s</string>
     <string name="place_edit_title">Editar local</string>
     <string name="place_new_title">Novo local</string>
     <string name="place_field_name">Nome</string>
@@ -128,6 +135,8 @@
     <string name="place_err_save">Erro ao salvar local.</string>
     <string name="place_err_delete">Erro ao excluir local.</string>
     <string name="place_err_load">Erro ao carregar.</string>
+    <string name="place_err_type_unsupported">Tipo de local não suportado pelo servidor. Atualize o app/banco.</string>
+    <string name="common_err_permission">Voc\u00ea n\u00e3o tem permiss\u00e3o para editar este local.</string>
     <string name="place_err_login">Você precisa entrar primeiro.</string>
     <string name="place_err_permission">Permissão de localização necessária. Autorize nas configurações do app.</string>
     <string name="place_err_location_now">Não foi possível obter sua localização agora.</string>
@@ -156,6 +165,9 @@
     <string name="updated_hours_ago">há %1$s h</string>
     <string name="updated_days_ago">há %1$s dias</string>
     <string name="updated_unknown">sem atualização</string>
+    <string name="member_you_badge">Você</string>
+    <string name="member_waiting_first_update">Aguardando primeira atualização</string>
+    <string name="settings_current_account_unknown">Conta conectada</string>
 
     <!-- Convite (F4) -->
     <string name="invite_title">Convidar família</string>
@@ -332,4 +344,6 @@
     <string name="routes_no_current_location">Localiza\u00e7\u00e3o atual indispon\u00edvel</string>
     <string name="routes_err_open">N\u00e3o foi poss\u00edvel abrir o Google Maps</string>
     <string name="routes_err_no_map_app">Nenhum aplicativo de mapas encontrado neste aparelho.</string>
+    <string name="routes_opening_google_maps">Abrindo no Google Maps</string>
+    <string name="routes_opening_browser">Abrindo no navegador</string>
 </resources>

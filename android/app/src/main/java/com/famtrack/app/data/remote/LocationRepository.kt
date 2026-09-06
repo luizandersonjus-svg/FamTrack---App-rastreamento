@@ -5,6 +5,8 @@ import com.famtrack.app.data.model.RoutePoint
 import android.util.Log
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class LocationRepository {
 
@@ -105,12 +107,54 @@ class LocationRepository {
         return points
     }
 
-    suspend fun saveRoutePoint(routePoint: RoutePoint) {
-        client.from("route_history").insert(routePoint)
+    /**
+     * Tenta gravar o ponto no schema completo (SQL 04). Se a migração
+     * sql/04_route_history.sql ainda não foi aplicada no Supabase (colunas
+     * accuracy/speed/bearing/battery_level/provider ausentes), a inserção
+     * completa falha e um fallback legado com apenas as colunas originais é
+     * tentado para o percurso não se perder. Retorna true quando o ponto foi
+     * persistido por qualquer caminho.
+     */
+    suspend fun saveRoutePoint(routePoint: RoutePoint): Boolean {
+        return try {
+            client.from("route_history").insert(routePoint)
+            true
+        } catch (e: Exception) {
+            Log.w(
+                ROUTE_HISTORY_TAG,
+                "Insert completo falhou (possível falta de sql/04_route_history.sql); tentando fallback legado",
+                e
+            )
+            try {
+                client.from("route_history")
+                    .insert(
+                        buildJsonObject {
+                            put("family_id", routePoint.family_id)
+                            put("user_id", routePoint.user_id)
+                            put("latitude", routePoint.latitude)
+                            put("longitude", routePoint.longitude)
+                            put(
+                                "recorded_at",
+                                routePoint.recorded_at
+                                    ?: java.time.Instant.now().toString()
+                            )
+                        }
+                    )
+                Log.w(
+                    ROUTE_HISTORY_TAG,
+                    "Fallback legado aplicado: aplique sql/04_route_history.sql no Supabase para histórico completo"
+                )
+                true
+            } catch (e2: Exception) {
+                Log.w(ROUTE_HISTORY_TAG, "Fallback legado também falhou; ponto descartado", e2)
+                false
+            }
+        }
     }
 
     companion object {
         private const val TAG = "LocationRepository"
+        private const val ROUTE_HISTORY_TAG = "FamTrackRouteHistory"
         private const val ROUTE_PAGE_SIZE = 1000L
         private const val MAX_ROUTE_POINTS_PER_DAY = 20_000
     }
