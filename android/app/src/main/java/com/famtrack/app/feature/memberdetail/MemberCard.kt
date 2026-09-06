@@ -26,7 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -81,8 +80,8 @@ fun batteryIcon(level: Int): ImageVector {
 
 /**
  * Card de membro com foto (ou iniciais), status humano, tempo da última
- * atualização e bateria (alerta abaixo de 20%). Esmaece se a última
- * atualização for mais antiga que 60 minutos, exceto para o próprio usuário.
+ * atualização e bateria (alerta abaixo de 20%). Todos os cards aparecem com
+ * opacidade total, independentemente do tempo da última atualização.
  * Sem última atualização, mostra "Aguardando primeira atualização".
  */
 @Composable
@@ -92,16 +91,12 @@ fun MemberCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val stale = !info.isSelf && info.lastUpdatedMillis?.let {
-        System.currentTimeMillis() - it > 60 * 60 * 1000L
-    } ?: false
     val waitingFirstUpdate = !info.sharingPaused && info.lastUpdatedMillis == null
 
     Card(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
-            .then(if (stale) Modifier.alpha(0.55f) else Modifier)
     ) {
         Row(
             modifier = Modifier
