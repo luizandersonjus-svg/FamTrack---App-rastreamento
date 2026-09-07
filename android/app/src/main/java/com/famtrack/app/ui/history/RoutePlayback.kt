@@ -61,6 +61,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 private const val PLAYBACK_BASE_DURATION_MS = 30_000f
 private const val CAMERA_FOLLOW_MIN_INTERVAL_NS = 700_000_000L
 private const val STOP_PAUSE_MS = 600L
+private const val FINISH_RESET_DELAY_MS = 900L
 private const val STOP_DISTANCE_M = 15f
 private const val STOP_TIME_MS = 5 * 60_000L
 
@@ -186,10 +187,18 @@ internal class RoutePlaybackController internal constructor(
         }
     }
 
-    /** Conclui a reprodução (execução única, sem loop): para e volta o avatar ao início. */
+    /** Conclui a reprodução (execução única, sem loop): para automático. */
     fun finish() {
+        if (!isPlaying) return
         isPlaying = false
         finished = true
+        stopMessage = null
+        // Mantém o progresso em 1f por um instante (avatar no fim); a tela
+        // chama [returnToStart] após uma pequena pausa para voltar ao início.
+    }
+
+    /** Volta o marcador ao início, mantendo o estado "finalizado". */
+    fun returnToStart() {
         stopMessage = null
         progress = 0f
         if (hasRoute) avatarMarker.position = positionFor(0f)
@@ -281,6 +290,18 @@ internal fun RoutePlaybackEngine(controller: RoutePlaybackController) {
             controller.stopMessage = null
             if (controller.progress < 1f && !controller.finished) {
                 controller.isPlaying = true
+            }
+        }
+    }
+
+    // Fim de execução única: pausa automaticamente ao chegar em 1f e, após uma
+    // pequena pausa, volta o marcador ao início — sem loop infinito. Se o usuário
+    // reproduzir de novo durante a pausa, o reset é abortado.
+    LaunchedEffect(controller.finished) {
+        if (controller.finished) {
+            delay(FINISH_RESET_DELAY_MS)
+            if (controller.finished && !controller.isPlaying) {
+                controller.returnToStart()
             }
         }
     }
@@ -517,7 +538,7 @@ internal fun RoutePlaybackControls(
  * branco com iniciais (cor primária) e borda branca 3.5dp. Sem pino (o avatar
  * "flutua" sobre o mapa). Anchor do Marker = (0.5f, 0.5f).
  */
-private fun playbackAvatarBitmap(
+internal fun playbackAvatarBitmap(
     density: Float,
     name: String?,
     avatarColor: Int

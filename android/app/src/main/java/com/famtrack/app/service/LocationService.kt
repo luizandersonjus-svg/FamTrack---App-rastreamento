@@ -268,10 +268,16 @@ class LocationService : Service() {
         val locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 try {
+                    Log.d(FAM_TRACK_ROUTE_TAG, "fix recebido")
                     result.lastLocation?.let { location ->
                         lastKnownLocation = location
                         // Política de privacidade: pausado, nada é enviado ao backend.
-                        if (!isSharingPaused()) {
+                        if (isSharingPaused()) {
+                            Log.d(FAM_TRACK_ROUTE_TAG, "rota: ignorado por compartilhamento pausado")
+                        } else {
+                            // Caminhos INDEPENDENTES: falha no feed ao vivo (locations) não
+                            // impede a gravação em route_history e vice-versa — cada um tem
+                            // try/catch próprio em sua própria coroutine.
                             sendLocationToSupabase(location)
                             saveRoutePoint(location)
                         }
@@ -356,8 +362,10 @@ class LocationService : Service() {
      *    mantém os limiares anteriores (20m / 20s);
      * C) curva: mudança de rumo > 15° (30° parado), velocidade > 1 m/s,
      *    deslocou >= 8m, tempo >= 5s;
-     * D) permanência: nada gravado há >= 3min (mantém paradas visíveis no resumo);
-     * E) fixes com accuracy > 500m só valem para D.
+     * D) permanência: nada gravado há >= 60s (garante ao menos 1 ponto por
+     *    minuto com fix válido, mesmo parado/movimento lento — fonte ininterrupta
+     *    para o histórico);
+     * E) fixes com accuracy > 150m só valem para D (nunca para forma da rota).
      */
     private fun shouldRecordRoutePoint(location: Location): Boolean {
         val lastLat = lastRouteLat
@@ -366,7 +374,7 @@ class LocationService : Service() {
 
         val elapsed = location.time - lastRouteTime
         val accuracy = location.accuracy
-        // E) ignora jitter de GPS parado com precisão ruim (regras B/C)
+        // E) ignora jitter de GPS parado com precisão ruim (regras B/C); D sempre vale.
         val accurate = accuracy <= 0f || accuracy <= ROUTE_MAX_ACCURACY_M
 
         // Em movimento a amostragem fica mais densa (captura curvas); parado,
@@ -428,7 +436,10 @@ class LocationService : Service() {
             Log.e(TAG, "Erro protegido ao avaliar amostragem; ponto descartado: ${e.localizedMessage}")
             false
         }
-        if (!shouldRecord) return
+        if (!shouldRecord) {
+            Log.d(FAM_TRACK_ROUTE_TAG, "rota: ignorado por amostragem")
+            return
+        }
 
         serviceScope.launch {
             try {
@@ -448,29 +459,42 @@ class LocationService : Service() {
                     provider = location.provider
                 )
                 val saved = locationRepository.saveRoutePoint(routePoint)
-                // Sucesso (insert completo ou fallback legado): atualiza o ponto de
+                // Sucesso (insert completo ou fallback mínimo): atualiza o ponto de
                 // referência da amostragem para o próximo fix continuar a rota.
                 if (saved) {
+                    val firstPoint = lastRouteLat == null || lastRouteLng == null
                     lastRouteLat = location.latitude
                     lastRouteLng = location.longitude
                     lastRouteTime = location.time
                     lastRouteBearing = location.bearing
                     hasLastRouteBearing = location.hasBearing()
+                    Log.d(
+                        FAM_TRACK_ROUTE_TAG,
+                        if (firstPoint) "rota: primeiro ponto salvo" else "rota: ponto salvo"
+                    )
                 } else {
                     Log.w(
-                        ROUTE_HISTORY_TAG,
-                        "Ponto de rota descartado: insert completo e fallback legado falharam"
+                        FAM_TRACK_ROUTE_TAG,
+                        "Ponto de rota descartado: insert completo e fallback mínimo falharam"
                     )
                 }
             } catch (e: Exception) {
                 Log.w(
-                    ROUTE_HISTORY_TAG,
-                    "Falha ao gravar ponto de rota (ignorada); próxima amostra tentará de novo",
-                    e
+                    FAM_TRACK_ROUTE_TAG,
+                    "rota: falha ao salvar: ${shortMessage(e)}"
                 )
             }
         }
     }
+
+    /** Mensagem curta e sem dados sensíveis para logs de rota. */
+    private fun shortMessage(e: Exception): String =
+        e.localizedMessage
+            ?.substringBefore('\n')
+            ?.trim()
+            ?.take(120)
+            ?.takeIf { it.isNotBlank() }
+            ?: "erro desconhecido"
 
     private fun refreshGeofenceCache() {
         val familyId = currentFamilyId ?: return
@@ -670,7 +694,7 @@ class LocationService : Service() {
         const val EXTRA_USER_ID = "EXTRA_USER_ID"
 
         private const val TAG = "LocationService"
-        private const val ROUTE_HISTORY_TAG = "FamTrackRouteHistory"
+        private const val FAM_TRACK_ROUTE_TAG = "FamTrackRoute"
         private const val SERVICE_PREFS = "location_service_prefs"
         private const val KEY_FAMILY_ID = "service_family_id"
         private const val KEY_USER_ID = "service_user_id"
@@ -689,13 +713,16 @@ class LocationService : Service() {
 
         // Amostragem do histórico de rota (Fase 1)
         private const val ROUTE_MIN_DISTANCE_FLOOR_M = 20.0
-        private const val ROUTE_MAX_ACCURACY_M = 500.0
+        // Accuracy máxima para valer nas regras de forma da rota (B/C); acima
+        // disso o ponto só é gravado pela regra de permanência D (60s).
+        private const val ROUTE_MAX_ACCURACY_M = 150.0
         private const val ROUTE_MIN_TIME_MS = 20_000L
         private const val ROUTE_CURVE_TURN_DEG = 30.0
         private const val ROUTE_CURVE_MIN_DISTANCE_M = 10.0
         private const val ROUTE_CURVE_MIN_TIME_MS = 5_000L
         private const val ROUTE_CURVE_MIN_SPEED_MS = 1.0
-        private const val ROUTE_HEARTBEAT_MS = 3 * 60_000L
+        // Garante ao menos 1 ponto por minuto com fix válido (também parado/lento).
+        private const val ROUTE_HEARTBEAT_MS = 60_000L
 
         // Limiares densos quando em movimento (velocidade > 1 m/s): mais pontos
         // em deslocamento para desenhar curvas sem o efeito "linha reta". Caminhada

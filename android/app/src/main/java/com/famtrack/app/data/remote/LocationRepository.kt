@@ -108,53 +108,78 @@ class LocationRepository {
     }
 
     /**
-     * Tenta gravar o ponto no schema completo (SQL 04). Se a migração
-     * sql/04_route_history.sql ainda não foi aplicada no Supabase (colunas
-     * accuracy/speed/bearing/battery_level/provider ausentes), a inserção
-     * completa falha e um fallback legado com apenas as colunas originais é
-     * tentado para o percurso não se perder. Retorna true quando o ponto foi
-     * persistido por qualquer caminho.
+     * Tenta gravar o ponto no schema completo (SQL 04). Se a migração ainda
+     * não foi aplicada no Supabase (colunas de enriquecimento inexistentes),
+     * detecta o ERRO DE SCHEMA e cai automaticamente para o payload mínimo
+     * (family_id, user_id, latitude, longitude, recorded_at) para o percurso
+     * não se perder — mantendo compatibilidade com schema antigo e novo.
+     *
+     * Falhas transitórias (rede, rate limit) NÃO disparam o fallback: são
+     * reportadas com mensagem curta e o ponto é descartado; o serviço tenta de
+     * novo no próximo fix. Retorna true quando o ponto foi persistido por
+     * qualquer caminho.
      */
     suspend fun saveRoutePoint(routePoint: RoutePoint): Boolean {
         return try {
             client.from("route_history").insert(routePoint)
             true
         } catch (e: Exception) {
-            Log.w(
-                ROUTE_HISTORY_TAG,
-                "Insert completo falhou (possível falta de sql/04_route_history.sql); tentando fallback legado",
-                e
-            )
-            try {
-                client.from("route_history")
-                    .insert(
-                        buildJsonObject {
-                            put("family_id", routePoint.family_id)
-                            put("user_id", routePoint.user_id)
-                            put("latitude", routePoint.latitude)
-                            put("longitude", routePoint.longitude)
-                            put(
-                                "recorded_at",
-                                routePoint.recorded_at
-                                    ?: java.time.Instant.now().toString()
-                            )
-                        }
-                    )
-                Log.w(
-                    ROUTE_HISTORY_TAG,
-                    "Fallback legado aplicado: aplique sql/04_route_history.sql no Supabase para histórico completo"
-                )
-                true
-            } catch (e2: Exception) {
-                Log.w(ROUTE_HISTORY_TAG, "Fallback legado também falhou; ponto descartado", e2)
+            if (isMissingColumnError(e)) {
+                Log.w(ROUTE_TAG, "schema antigo detectado; fallback mínimo usado")
+                try {
+                    client.from("route_history")
+                        .insert(minimalRoutePayload(routePoint))
+                    true
+                } catch (e2: Exception) {
+                    Log.w(ROUTE_TAG, "rota: falha ao salvar: ${shortMessage(e2)}")
+                    false
+                }
+            } else {
+                Log.w(ROUTE_TAG, "rota: falha ao salvar: ${shortMessage(e)}")
                 false
             }
         }
     }
 
+    /** Payload mínimo exigido pelo schema original de route_history. */
+    private fun minimalRoutePayload(routePoint: RoutePoint) =
+        buildJsonObject {
+            put("family_id", routePoint.family_id)
+            put("user_id", routePoint.user_id)
+            put("latitude", routePoint.latitude)
+            put("longitude", routePoint.longitude)
+            put(
+                "recorded_at",
+                routePoint.recorded_at ?: java.time.Instant.now().toString()
+            )
+        }
+
+    /**
+     * Erro de schema (SQL 03/04) quando uma/mais colunas não existem na tabela.
+     * Firewall PostgREST costuma expor código 42703 ou "column … does not exist".
+     */
+    private fun isMissingColumnError(e: Exception): Boolean {
+        val text = listOfNotNull(e.message, e.cause?.message)
+            .joinToString(" ")
+            .lowercase()
+        return text.contains("does not exist") ||
+            text.contains("undefined_column") ||
+            text.contains("42703") ||
+            text.contains("column")
+    }
+
+    /** Mensagem curta e sem dados sensíveis (não loga stacktrace/URLs completos). */
+    private fun shortMessage(e: Exception): String =
+        e.localizedMessage
+            ?.substringBefore('\n')
+            ?.trim()
+            ?.take(120)
+            ?.takeIf { it.isNotBlank() }
+            ?: "erro desconhecido"
+
     companion object {
         private const val TAG = "LocationRepository"
-        private const val ROUTE_HISTORY_TAG = "FamTrackRouteHistory"
+        private const val ROUTE_TAG = "FamTrackRoute"
         private const val ROUTE_PAGE_SIZE = 1000L
         private const val MAX_ROUTE_POINTS_PER_DAY = 20_000
     }
