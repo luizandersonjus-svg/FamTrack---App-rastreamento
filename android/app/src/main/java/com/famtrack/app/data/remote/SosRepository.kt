@@ -3,6 +3,8 @@ package com.famtrack.app.data.remote
 import com.famtrack.app.data.model.SosAlert
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class SosRepository {
 
@@ -17,18 +19,14 @@ class SosRepository {
         fixAt: Long? = null,
         message: String = "SOS acionado!"
     ): SosAlert {
-        val payload = mutableMapOf<String, Any>(
-            "family_id" to familyId,
-            "user_id" to userId,
-            "latitude" to latitude,
-            "longitude" to longitude,
-            "message" to message
-        )
-        if (accuracy != null) {
-            payload["accuracy"] = accuracy
-        }
-        if (fixAt != null) {
-            payload["fix_at"] = java.time.Instant.ofEpochMilli(fixAt).toString()
+        val payload = buildJsonObject {
+            put("family_id", familyId)
+            put("user_id", userId)
+            put("latitude", latitude)
+            put("longitude", longitude)
+            put("message", message)
+            accuracy?.let { put("accuracy", it) }
+            fixAt?.let { put("fix_at", java.time.Instant.ofEpochMilli(it).toString()) }
         }
         val alert = client.from("sos_alerts")
             .insert(payload)

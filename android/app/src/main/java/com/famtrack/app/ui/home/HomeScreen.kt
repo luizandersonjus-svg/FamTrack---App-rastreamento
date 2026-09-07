@@ -1020,7 +1020,7 @@ fun HomeScreen(
                                     color = Color.White
                                 )
                             }
-                            if (alert.id != null && alert.user_id != userId) {
+                            if (alert.id != null) {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 TextButton(
                                     onClick = {
@@ -1037,7 +1037,13 @@ fun HomeScreen(
                                     }
                                 ) {
                                     Text(
-                                        text = stringResource(R.string.home_sos_resolve),
+                                        text = stringResource(
+                                            if (alert.user_id == userId) {
+                                                R.string.home_sos_end
+                                            } else {
+                                                R.string.home_sos_resolve
+                                            }
+                                        ),
                                         color = Color.White
                                     )
                                 }
@@ -1104,11 +1110,7 @@ fun HomeScreen(
                                         append(" • ")
                                         append(carouselOrder.size)
                                         append(
-                                            if (carouselOrder.size == 1) {
-                                                context.getString(R.string.home_member_count_one)
-                                            } else {
-                                                context.getString(R.string.home_member_count_many)
-                                            }
+                                            if (carouselOrder.size == 1) " membro" else " membros"
                                         )
                                     },
                                     style = MaterialTheme.typography.titleSmall,

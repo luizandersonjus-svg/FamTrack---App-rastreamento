@@ -37,10 +37,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val dayFormatter = DateTimeFormatter.ofPattern("EEEE, d 'de' MMMM", Locale("pt", "BR"))
+private val eventTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+/** Converte o created_at (UTC do Postgres) para o fuso do aparelho. */
+private fun toDeviceTime(iso: String?, zone: ZoneId): String? = try {
+    if (iso == null) null else OffsetDateTime.parse(iso).atZoneSameInstant(zone).format(eventTimeFormatter)
+} catch (e: Exception) {
+    null
+}
+
+/** Data local (fuso do aparelho) do evento. */
+private fun toDeviceDate(iso: String?, zone: ZoneId): String? = try {
+    if (iso == null) null else OffsetDateTime.parse(iso).atZoneSameInstant(zone).toLocalDate().toString()
+} catch (e: Exception) {
+    null
+}
 
 /**
  * Histórico de atividade agrupado por dia (F6). Quando memberId é informado,
@@ -147,8 +165,10 @@ fun ActivityScreen(
         eventLocations = current + additions
     }
 
+    val zone = remember { ZonedDateTime.now().zone }
+
     val grouped = remember(events) {
-        events.groupBy { it.created_at?.substring(0, 10) ?: "desconhecido" }
+        events.groupBy { toDeviceDate(it.created_at, zone) ?: "desconhecido" }
     }
 
     Scaffold(
@@ -254,6 +274,7 @@ fun ActivityScreen(
                                     displayName = memberNames[event.member_id] ?: "Membro",
                                     placeName = loc?.messagePlace,
                                     locationSubtitle = loc?.subtitle,
+                                    zone = zone,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
@@ -291,6 +312,7 @@ private fun ActivityRow(
     displayName: String,
     placeName: String?,
     locationSubtitle: String?,
+    zone: ZoneId,
     modifier: Modifier = Modifier
 ) {
     val (icon, tint) = eventIcon(event)
@@ -314,11 +336,7 @@ private fun ActivityRow(
         "LOW_BATTERY" -> stringResource(R.string.activity_low_battery)
         else -> event.type
     }
-    val timeLabel = try {
-        event.created_at?.substring(11, 16) ?: ""
-    } catch (e: Exception) {
-        ""
-    }
+    val timeLabel = toDeviceTime(event.created_at, zone) ?: ""
 
     Card(
         modifier = modifier,
