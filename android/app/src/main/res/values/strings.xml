@@ -253,6 +253,28 @@
     <string name="home_action_invite">Convidar</string>
     <string name="home_action_routes">Rotas</string>
 <string name="home_action_privacy">Privacidade</string>
+    <string name="home_action_settings">Configura\u00e7\u00f5es</string>
+    <string name="home_action_more">Mais op\u00e7\u00f5es</string>
+    <string name="home_action_center">Centralizar na minha localiza\u00e7\u00e3o</string>
+    <string name="home_default_family">Fam\u00edlia</string>
+    <string name="home_member_count_one"> membro</string>
+    <string name="home_member_count_many"> membros</string>
+    <string name="home_loading_location">Obtendo localiza\u00e7\u00e3o\u2026</string>
+    <string name="home_location_perm_title">Permiss\u00e3o de localiza\u00e7\u00e3o necess\u00e1ria</string>
+    <string name="home_location_perm_text">Autorize o acesso \u00e0 localiza\u00e7\u00e3o para compartilhar e ver a posi\u00e7\u00e3o da fam\u00edlia.</string>
+    <string name="home_location_perm_action">Permitir</string>
+    <string name="home_empty_members_title">Nenhum membro por aqui</string>
+    <string name="home_empty_members_text">Convide algu\u00e9m da fam\u00edlia para acompanhar a localiza\u00e7\u00e3o de voc\u00eas.</string>
+    <string name="home_empty_members_action">Convidar</string>
+    <string name="home_panel_placeholder">Toque para ver todos os membros</string>
+    <string name="home_panel_expand_cd">Expandir lista de membros</string>
+    <string name="home_panel_collapse_cd">Recolher lista de membros</string>
+    <string name="home_panel_member_format">%1$s \u00b7 %2$s</string>
+    <string name="home_sos_active_title">ALERTA SOS ATIVO</string>
+    <string name="home_sos_time_label">Hor\u00e1rio</string>
+    <string name="home_sos_location_label">Localiza\u00e7\u00e3o</string>
+    <string name="home_sos_resolve">Resolver</string>
+    <string name="sos_resolve_fail">N\u00e3o foi poss\u00edvel resolver o alerta. Tente novamente.</string>
     <string name="sos_notif_fallback">Um membro da fam\u00edlia</string>
 
     <!-- Hist\u00f3rico de rotas (Fase 1) -->
@@ -300,6 +322,31 @@
     <string name="playback_finished">Fim do trajeto</string>
     <string name="playback_stopped">Parado por %1$s min</string>
     <string name="playback_insufficient">Trajeto insuficiente para reprodu\u00e7\u00e3o</string>
+
+    <!-- Hist\u00f3rico: linha do tempo di\u00e1ria (timeline de percursos) -->
+    <string name="history_no_points_any">Nenhum ponto de rota registrado neste dia. Verifique se o rastreamento em segundo plano est\u00e1 ativo.</string>
+    <string name="history_no_trip_significant">H\u00e1 pontos registrados, mas nenhum deslocamento significativo foi detectado.</string>
+    <string name="history_day_points_count">%1$d pontos de rota</string>
+    <string name="history_day_first_time">In\u00edcio %1$s</string>
+    <string name="history_day_last_time">Fim %1$s</string>
+    <string name="history_day_trips_count">%1$d percursos</string>
+    <string name="history_member_laidover">no %1$s</string>
+    <string name="history_route_day_title">Rota do dia</string>
+    <string name="history_route_day_play">Reproduzir rota do dia</string>
+    <string name="history_trip_generic_title">Deslocamento registrado</string>
+    <string name="history_trip_subtitle">%1$s \u2013 %2$s \u2022 %3$s</string>
+    <string name="history_metric_avg">m\u00e9dia %1$s km/h</string>
+    <string name="history_metric_max">m\u00e1x. %1$s km/h</string>
+    <string name="history_trip_safe">Percurso seguro</string>
+    <string name="history_trip_safe_note">Sem ind\u00edcios de excesso de velocidade no trecho.</string>
+    <string name="history_trip_play">Reproduzir percurso</string>
+    <string name="history_trip_play_cd">Abrir reprodu\u00e7\u00e3o do percurso</string>
+    <string name="history_trip_thumbnail_cd">Mapa do percurso</string>
+    <string name="history_fallback_thumbnail">Percurso</string>
+    <string name="history_insufficient_trip">Percurso insuficiente para reprodu\u00e7\u00e3o.</string>
+    <string name="history_player_close_cd">Fechar reprodu\u00e7\u00e3o</string>
+    <string name="history_player_time_cd">Hor\u00e1rio atual da reprodu\u00e7\u00e3o</string>
+    <string name="history_player_title_day">Rota do dia</string>
 
     <!-- Login com Google (OAuth web) -->
     <string name="login_google_waiting">Aguardando confirma\u00e7\u00e3o do Google\u2026</string>

@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -33,6 +34,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -78,6 +81,9 @@ import com.google.maps.android.compose.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -135,6 +141,8 @@ fun HomeScreen(
     var checkoutBusy by remember { mutableStateOf(false) }
     var onboardingPending by remember { mutableStateOf(true) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var menuExpanded by remember { mutableStateOf(false) }
+    var membersPanelExpanded by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         onboardingPending = !OnboardingPrefs.isDone(context)
@@ -498,40 +506,75 @@ fun HomeScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 actions = {
-                    IconButton(onClick = onNavigateToPlaces) {
+                    IconButton(onClick = onNavigateToSettings) {
                         Icon(
-                            Icons.Filled.Place,
-                            contentDescription = stringResource(R.string.home_action_places),
+                            Icons.Outlined.Settings,
+                            contentDescription = stringResource(R.string.home_action_settings),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    IconButton(onClick = onNavigateToActivity) {
-                        Icon(
-                            Icons.Filled.Timeline,
-                            contentDescription = stringResource(R.string.home_action_activity),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(onClick = onNavigateToInvite) {
-                        Icon(
-                            Icons.Filled.GroupAdd,
-                            contentDescription = stringResource(R.string.home_action_invite),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(onClick = onNavigateToPrivacy) {
-                        Icon(
-                            Icons.Filled.Lock,
-                            contentDescription = stringResource(R.string.home_action_privacy),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    IconButton(onClick = { showLogoutDialog = true }) {
-                        Icon(
-                            Icons.Default.Logout,
-                            contentDescription = stringResource(R.string.logout),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(
+                                Icons.Filled.MoreVert,
+                                contentDescription = stringResource(R.string.home_action_more),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.home_action_places)) },
+                                leadingIcon = { Icon(Icons.Filled.Place, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onNavigateToPlaces()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.home_action_activity)) },
+                                leadingIcon = { Icon(Icons.Filled.Timeline, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onNavigateToActivity()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.home_action_invite)) },
+                                leadingIcon = { Icon(Icons.Filled.GroupAdd, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onNavigateToInvite()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.home_action_privacy)) },
+                                leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onNavigateToPrivacy()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.home_action_routes)) },
+                                leadingIcon = { Icon(Icons.Filled.Directions, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onNavigateToRoutes()
+                                }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.logout)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    showLogoutDialog = true
+                                }
+                            )
+                        }
                     }
                 }
             )
@@ -705,32 +748,129 @@ fun HomeScreen(
                 PlacesMapOverlay(places)
             }
 
-            if (currentLocation == null) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
-                        ),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            when {
+                !hasLocationPermission -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Column(
-                            modifier = Modifier.padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(40.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                "Obtendo localização…",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Filled.LocationOn,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = stringResource(R.string.home_location_perm_title),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.home_location_perm_text),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(
+                                    onClick = {
+                                        permissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.home_location_perm_action))
+                                }
+                            }
+                        }
+                    }
+                }
+                currentLocation == null -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(40.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    stringResource(R.string.home_loading_location),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                familyId != null && familyLocations.isEmpty() -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Filled.GroupAdd,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = stringResource(R.string.home_empty_members_title),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.home_empty_members_text),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(onClick = onNavigateToInvite) {
+                                    Text(stringResource(R.string.home_empty_members_action))
+                                }
+                            }
                         }
                     }
                 }
@@ -778,148 +918,290 @@ fun HomeScreen(
                     Column(
                         modifier = Modifier.padding(16.dp)
                     ) {
-                        Text(
-                            text = "ALERTA SOS ATIVO",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        activeSosAlerts.forEach { alert ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.Warning,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = Color.White
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = alert.message,
-                                style = MaterialTheme.typography.bodySmall,
+                                text = stringResource(R.string.home_sos_active_title),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
                                 color = Color.White
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        activeSosAlerts.forEach { alert ->
+                            val name = memberInfos[alert.user_id]?.display_name
+                                ?: alert.user?.name
+                                ?: context.getString(R.string.sos_notif_fallback)
+                            val time = formatSosTime(alert.created_at)
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            if (time != null) {
+                                Text(
+                                    text = context.getString(R.string.home_sos_time_label) + " " + time,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White
+                                )
+                            }
+                            memberStatuses[alert.user_id]?.takeIf { it.isNotBlank() }?.let { address ->
+                                Text(
+                                    text = context.getString(R.string.home_sos_location_label) + ": " + address,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White
+                                )
+                            }
+                            if (alert.message.isNotBlank()) {
+                                Text(
+                                    text = alert.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White
+                                )
+                            }
+                            if (alert.id != null && alert.user_id != userId) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                TextButton(
+                                    onClick = {
+                                        val alertId = alert.id
+                                        scope.launch {
+                                            try {
+                                                sosRepository.resolveSos(alertId)
+                                                activeSosAlerts = activeSosAlerts.filter { it.id != alertId }
+                                            } catch (e: Exception) {
+                                                e.printStackTrace()
+                                                sosMessage = context.getString(R.string.sos_resolve_fail)
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.home_sos_resolve),
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Painel inferior de membros (F2/F3/F7): barra compacta recolhida por padrão;
+            // ao tocar, expande o LazyRow com os MemberCards. O usuário atual
+            // aparece primeiro, com o selo "Você" no card.
+            if (familyLocations.isNotEmpty()) {
+                val carouselOrder = remember(familyLocations, userId) {
+                    familyLocations.sortedBy { it.user_id != userId }
+                }
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (membersPanelExpanded) {
+                        LazyRow(
+                            modifier = Modifier.padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(carouselOrder, key = { it.user_id }) { loc ->
+                                val info = memberInfos[loc.user_id]
+                                MemberCard(
+                                    info = MemberCardInfo(
+                                        memberId = loc.user_id,
+                                        displayName = info?.display_name ?: "Membro",
+                                        avatarUrl = info?.avatar_url,
+                                        statusText = memberStatuses[loc.user_id] ?: "",
+                                        batteryLevel = loc.batteryLevel,
+                                        lastUpdatedMillis = loc.lastUpdatedAt,
+                                        sharingPaused = flagByMember[loc.user_id]?.sharing_paused == true,
+                                        isSelf = loc.user_id == userId
+                                    ),
+                                    onClick = { selectedMember = loc },
+                                    modifier = Modifier.width(240.dp)
+                                )
+                            }
+                        }
+                    }
+                    Surface(
+                        onClick = { membersPanelExpanded = !membersPanelExpanded },
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 3.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = buildString {
+                                        append(familyName ?: context.getString(R.string.home_default_family))
+                                        append(" • ")
+                                        append(carouselOrder.size)
+                                        append(
+                                            if (carouselOrder.size == 1) {
+                                                context.getString(R.string.home_member_count_one)
+                                            } else {
+                                                context.getString(R.string.home_member_count_many)
+                                            }
+                                        )
+                                    },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                val selId = selectedMember?.user_id
+                                val selName = selId?.let { memberInfos[it]?.display_name }
+                                if (selName != null) {
+                                    Text(
+                                        text = context.getString(
+                                            R.string.home_panel_member_format,
+                                            selName,
+                                            memberStatuses[selId] ?: ""
+                                        ),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else {
+                                    Text(
+                                        text = stringResource(R.string.home_panel_placeholder),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = if (membersPanelExpanded) {
+                                    Icons.Filled.ExpandLess
+                                } else {
+                                    Icons.Filled.ExpandMore
+                                },
+                                contentDescription = stringResource(
+                                    if (membersPanelExpanded) {
+                                        R.string.home_panel_collapse_cd
+                                    } else {
+                                        R.string.home_panel_expand_cd
+                                    }
+                                ),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
             }
 
-            // Cards dos membros (F2/F3/F7) no rodapé do mapa.
-            // O usuário atual aparece primeiro, com o selo "Você" no card.
-            if (familyLocations.isNotEmpty()) {
-                val carouselOrder = remember(familyLocations, userId) {
-                    familyLocations.sortedBy { it.user_id != userId }
-                }
-                LazyRow(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = 92.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(carouselOrder, key = { it.user_id }) { loc ->
-                        val info = memberInfos[loc.user_id]
-                        MemberCard(
-                            info = MemberCardInfo(
-                                memberId = loc.user_id,
-                                displayName = info?.display_name ?: "Membro",
-                                avatarUrl = info?.avatar_url,
-                                statusText = memberStatuses[loc.user_id] ?: "",
-                                batteryLevel = loc.batteryLevel,
-                                lastUpdatedMillis = loc.lastUpdatedAt,
-                                sharingPaused = flagByMember[loc.user_id]?.sharing_paused == true,
-                                isSelf = loc.user_id == userId
-                            ),
-                            onClick = { selectedMember = loc },
-                            modifier = Modifier.width(240.dp)
-                        )
-                    }
-                }
-            }
-
-            // Coluna de controles do mapa (F5): Centralizar, Check-in e SOS.
-            // Posicionada à direita, acima do carrossel de membros.
+            // Coluna de controles do mapa: utilitárias (Minha localização e Check-in)
+            // agrupadas num bloco; SOS separado, dominante e em cor de
+            // emergência. Sobe quando o painel de membros está expandido,
+            // para nunca ficar sobreposto a ele.
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 188.dp),
+                    .padding(
+                        end = 16.dp,
+                        bottom = if (membersPanelExpanded) 236.dp else 88.dp
+                    ),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                ExtendedFloatingActionButton(
-                    onClick = onNavigateToRoutes,
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    shape = RoundedCornerShape(16.dp)
+                Surface(
+                    shape = RoundedCornerShape(28.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 6.dp,
+                    tonalElevation = 2.dp
                 ) {
-                    Icon(
-                        Icons.Default.Directions,
-                        contentDescription = null,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.home_action_routes),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                FloatingActionButton(
-                    onClick = {
-                        currentLocation?.let { (lat, lon) ->
-                            scope.launch {
-                                cameraPositionState.animate(
-                                    CameraUpdateFactory.newLatLngZoom(
-                                        com.google.android.gms.maps.model.LatLng(lat, lon),
-                                        15f
-                                    ),
-                                    500
+                    Column(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    currentLocation?.let { (lat, lon) ->
+                                        scope.launch {
+                                            cameraPositionState.animate(
+                                                CameraUpdateFactory.newLatLngZoom(
+                                                    com.google.android.gms.maps.model.LatLng(lat, lon),
+                                                    15f
+                                                ),
+                                                500
+                                            )
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.MyLocation,
+                                    contentDescription = stringResource(R.string.home_action_center),
+                                    modifier = Modifier.size(24.dp),
+                                    tint = MaterialTheme.colorScheme.primary
                                 )
                             }
                         }
-                    },
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        Icons.Default.MyLocation,
-                        contentDescription = "Minha localizacao",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-
-                FloatingActionButton(
-                    onClick = {
-                        if (!checkoutBusy) {
-                            scope.launch {
-                                checkoutBusy = true
-                                try {
-                                    val outcome = CheckInRepository().checkIn(context)
-                                    sosMessage = when (outcome) {
-                                        CheckInOutcome.SUCCESS ->
-                                            context.getString(R.string.checkin_done)
-                                        CheckInOutcome.NO_PERMISSION ->
-                                            context.getString(R.string.checkin_no_perm)
-                                        CheckInOutcome.NO_LOCATION ->
-                                            context.getString(R.string.checkin_no_location)
-                                        CheckInOutcome.TIMEOUT ->
-                                            context.getString(R.string.checkin_timeout)
-                                        CheckInOutcome.ERROR ->
-                                            context.getString(R.string.checkin_fail)
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 6.dp,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    if (!checkoutBusy) {
+                                        scope.launch {
+                                            checkoutBusy = true
+                                            try {
+                                                val outcome = CheckInRepository().checkIn(context)
+                                                sosMessage = when (outcome) {
+                                                    CheckInOutcome.SUCCESS ->
+                                                        context.getString(R.string.checkin_done)
+                                                    CheckInOutcome.NO_PERMISSION ->
+                                                        context.getString(R.string.checkin_no_perm)
+                                                    CheckInOutcome.NO_LOCATION ->
+                                                        context.getString(R.string.checkin_no_location)
+                                                    CheckInOutcome.TIMEOUT ->
+                                                        context.getString(R.string.checkin_timeout)
+                                                    CheckInOutcome.ERROR ->
+                                                        context.getString(R.string.checkin_fail)
+                                                }
+                                            } finally {
+                                                checkoutBusy = false
+                                            }
+                                        }
                                     }
-                                } finally {
-                                    checkoutBusy = false
-                                }
+                                },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = stringResource(R.string.checkin_cd),
+                                    modifier = Modifier.size(24.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
-                    },
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.primary,
-                    shape = CircleShape,
-                    modifier = Modifier.size(48.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Check,
-                        contentDescription = stringResource(R.string.checkin_cd),
-                        modifier = Modifier.size(24.dp)
-                    )
+                    }
                 }
-
                 SosButton(
                     onTrigger = triggerSos,
                     onTap = {
@@ -939,7 +1221,8 @@ fun HomeScreen(
                 Snackbar(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(16.dp),
+                        .padding(16.dp)
+                        .padding(bottom = if (membersPanelExpanded) 264.dp else 0.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(msg)
@@ -964,6 +1247,21 @@ fun HomeScreen(
                 onNavigateToMemberHistory(uid)
             }
         )
+    }
+}
+
+/** Formata o instante ISO do alerta SOS como HH:mm; null se indisponível. */
+private fun formatSosTime(iso: String?): String? {
+    if (iso.isNullOrBlank()) return null
+    val formatter = DateTimeFormatter.ofPattern("HH:mm")
+    return try {
+        OffsetDateTime.parse(iso).format(formatter)
+    } catch (_: Exception) {
+        try {
+            LocalDateTime.parse(iso).format(formatter)
+        } catch (_: Exception) {
+            null
+        }
     }
 }
 
