@@ -78,6 +78,13 @@ data class SosAlert(
     val longitude: Double,
     val message: String = "SOS acionado!",
     val resolved: Boolean = false,
+    val accuracy: Double? = null,
+    @SerialName("fix_at")
+    val fixAt: String? = null,
+    @SerialName("resolved_at")
+    val resolvedAt: String? = null,
+    @SerialName("resolved_by")
+    val resolvedBy: String? = null,
     val created_at: String? = null,
     // Dados do usuário (join)
     val user: User? = null

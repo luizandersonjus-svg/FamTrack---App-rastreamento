@@ -26,8 +26,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,6 +56,7 @@ fun SosButton(
 ) {
     var pressing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
 
     val progress by animateFloatAsState(
         targetValue = if (pressing) 1f else 0f,
@@ -94,6 +97,7 @@ fun SosButton(
                     // Timer de 3s: dispara o SOS se o dedo continuar pressionado.
                     val holdJob = scope.launch {
                         delay(HOLD_MILLIS)
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         triggered = true
                         onTrigger()
                     }

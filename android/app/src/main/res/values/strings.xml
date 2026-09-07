@@ -203,6 +203,7 @@
     <string name="sos_send_fail">Não foi possível enviar o SOS.</string>
     <string name="sos_cd">Acionar SOS</string>
     <string name="sos_no_location">Sem localização para enviar no SOS</string>
+    <string name="sos_approx">SOS enviado com localização aproximada. Ative a localização para melhor precisão.</string>
     <string name="checkin_doing">Fazendo check-in…</string>
     <string name="checkin_done">Check-in feito! </string>
     <string name="checkin_fail">Não foi possível fazer o check-in</string>

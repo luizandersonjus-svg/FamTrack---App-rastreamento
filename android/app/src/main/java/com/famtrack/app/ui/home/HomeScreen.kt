@@ -72,6 +72,9 @@ import com.famtrack.app.feature.sos.CheckInRepository
 import com.famtrack.app.feature.sos.RealtimeAlertListener
 import com.famtrack.app.feature.sos.SosButton
 import com.famtrack.app.feature.sos.SosCancelWindowDialog
+import com.famtrack.app.feature.sos.SosDeepLink
+import com.famtrack.app.feature.sos.SosFix
+import com.famtrack.app.feature.sos.LocationFixStore
 import com.famtrack.app.service.GeofenceWorker
 import com.famtrack.app.service.LocationService
 import io.github.jan.supabase.auth.auth
@@ -85,6 +88,9 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
+
+private const val MAX_SOS_ACCURACY_METERS = 250.0
+private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,6 +124,7 @@ fun HomeScreen(
     }
 
     var currentLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var currentFix by remember { mutableStateOf<SosFix?>(null) }
     var familyLocations by remember { mutableStateOf<List<FamLocation>>(emptyList()) }
     var activeSosAlerts by remember { mutableStateOf<List<com.famtrack.app.data.model.SosAlert>>(emptyList()) }
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -143,6 +150,7 @@ fun HomeScreen(
     var showLogoutDialog by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var membersPanelExpanded by remember { mutableStateOf(false) }
+    var skipNextCameraFollow by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         onboardingPending = !OnboardingPrefs.isDone(context)
@@ -188,7 +196,15 @@ fun HomeScreen(
         hasLocationPermission = fineGranted || coarseGranted
         if (hasLocationPermission) {
             startLocationUpdates(context) { location ->
-                currentLocation = Pair(location.latitude, location.longitude)
+                val fix = SosFix(
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    accuracy = location.accuracy.takeIf { it > 0f }?.toDouble(),
+                    fixAtMillis = location.time
+                )
+                currentLocation = Pair(fix.latitude, fix.longitude)
+                currentFix = fix
+                LocationFixStore.save(context, fix)
             }
             startSharingService(context, userId, familyId)
         }
@@ -204,7 +220,15 @@ fun HomeScreen(
             )
         } else {
             startLocationUpdates(context) { location ->
-                currentLocation = Pair(location.latitude, location.longitude)
+                val fix = SosFix(
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    accuracy = location.accuracy.takeIf { it > 0f }?.toDouble(),
+                    fixAtMillis = location.time
+                )
+                currentLocation = Pair(fix.latitude, fix.longitude)
+                currentFix = fix
+                LocationFixStore.save(context, fix)
             }
         }
 
@@ -261,7 +285,24 @@ fun HomeScreen(
     }
 
     LaunchedEffect(currentLocation) {
-        currentLocation?.let { (lat, lon) ->
+        if (skipNextCameraFollow) {
+            skipNextCameraFollow = false
+        } else {
+            currentLocation?.let { (lat, lon) ->
+                cameraPositionState.animate(
+                    CameraUpdateFactory.newLatLngZoom(
+                        com.google.android.gms.maps.model.LatLng(lat, lon),
+                        15f
+                    ),
+                    1000
+                )
+            }
+        }
+    }
+    // Clique na notificação de SOS: centraliza o mapa no alerta uma única vez.
+    LaunchedEffect(Unit) {
+        SosDeepLink.consume()?.let { (lat, lon) ->
+            skipNextCameraFollow = true
             cameraPositionState.animate(
                 CameraUpdateFactory.newLatLngZoom(
                     com.google.android.gms.maps.model.LatLng(lat, lon),
@@ -409,20 +450,31 @@ fun HomeScreen(
                 try {
                     val fId = familyId ?: return@launch
                     val uId = userId ?: return@launch
-                    val (lat, lon) = currentLocation ?: run {
+                    // Usa o fix em memória; se não houver, recorre ao último
+                    // fix persistido (app reaberto depois de kill/reboot).
+                    val fix = currentFix ?: LocationFixStore.load(context)
+                    if (fix == null) {
                         sosMessage = context.getString(R.string.sos_no_location)
                         return@launch
                     }
+                    val ageMillis = System.currentTimeMillis() - fix.fixAtMillis
+                    val approx = fix.accuracy == null ||
+                        fix.accuracy > MAX_SOS_ACCURACY_METERS ||
+                        ageMillis > MAX_SOS_FIX_AGE_MILLIS
                     try {
-                        val alert = sosRepository.triggerSos(fId, uId, lat, lon)
+                        val alert = sosRepository.triggerSos(
+                            fId, uId, fix.latitude, fix.longitude,
+                            accuracy = fix.accuracy,
+                            fixAt = fix.fixAtMillis
+                        )
                         try {
                             ActivityRepository().recordEvent(
                                 Event(
                                     family_id = fId,
                                     type = "SOS",
                                     member_id = uId,
-                                    lat = lat,
-                                    lng = lon
+                                    lat = fix.latitude,
+                                    lng = fix.longitude
                                 )
                             )
                         } catch (e: Exception) {
@@ -431,7 +483,9 @@ fun HomeScreen(
                         }
                         pendingSosId = alert.id
                         showSosCancelWindow = true
-                        sosMessage = context.getString(R.string.sos_sent)
+                        sosMessage = context.getString(
+                            if (approx) R.string.sos_approx else R.string.sos_sent
+                        )
                     } catch (e: Exception) {
                         e.printStackTrace()
                         sosMessage = context.getString(R.string.sos_send_fail)

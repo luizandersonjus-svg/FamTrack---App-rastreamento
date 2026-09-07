@@ -13,18 +13,25 @@ class SosRepository {
         userId: String,
         latitude: Double,
         longitude: Double,
+        accuracy: Double? = null,
+        fixAt: Long? = null,
         message: String = "SOS acionado!"
     ): SosAlert {
+        val payload = mutableMapOf<String, Any>(
+            "family_id" to familyId,
+            "user_id" to userId,
+            "latitude" to latitude,
+            "longitude" to longitude,
+            "message" to message
+        )
+        if (accuracy != null) {
+            payload["accuracy"] = accuracy
+        }
+        if (fixAt != null) {
+            payload["fix_at"] = java.time.Instant.ofEpochMilli(fixAt).toString()
+        }
         val alert = client.from("sos_alerts")
-            .insert(
-                mapOf(
-                    "family_id" to familyId,
-                    "user_id" to userId,
-                    "latitude" to latitude,
-                    "longitude" to longitude,
-                    "message" to message
-                )
-            )
+            .insert(payload)
             .decodeSingle<SosAlert>()
 
         // Notifica todos os membros da família (exceto o remetente)

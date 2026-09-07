@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.famtrack.app.data.remote.AuthCallbackState
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.sos.SosDeepLink
 import com.famtrack.app.ui.FamTrackNavigation
 import com.famtrack.app.ui.theme.FamTrackTheme
 import io.github.jan.supabase.auth.auth
@@ -24,6 +25,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleAuthIntent(intent)
+        handleSosExtra(intent)
         setContent {
             FamTrackTheme {
                 Surface(
@@ -39,6 +41,16 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleAuthIntent(intent)
+        handleSosExtra(intent)
+    }
+
+    /** Consome os extras sos_lat/sos_lng (clique na notificação de SOS). */
+    private fun handleSosExtra(intent: Intent?) {
+        if (intent?.hasExtra("sos_lat") != true) return
+        val lat = intent.getDoubleExtra("sos_lat", Double.NaN)
+        val lng = intent.getDoubleExtra("sos_lng", Double.NaN)
+        if (lat.isNaN() || lng.isNaN()) return
+        SosDeepLink.publish(lat, lng)
     }
 
     private fun handleAuthIntent(intent: Intent?) {
