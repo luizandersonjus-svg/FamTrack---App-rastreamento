@@ -91,7 +91,7 @@ fun RouteSearchScreen(onNavigateBack: () -> Unit) {
                 toast(context.getString(R.string.routes_no_current_location))
                 return
             }
-            String.format(java.util.Locale.getDefault(), "%.6f,%.6f", ll.first, ll.second)
+            String.format(java.util.Locale.US, "%.6f,%.6f", ll.first, ll.second)
         } else {
             if (originText.isBlank()) {
                 toast(context.getString(R.string.routes_origin_required))
@@ -110,6 +110,7 @@ fun RouteSearchScreen(onNavigateBack: () -> Unit) {
             "https://www.google.com/maps/dir/?api=1&destination=$destinationEncoded" +
                 "&travelmode=driving"
         }
+        Log.d(TAG, "Google Maps URL: $url")
         val mapsUri = Uri.parse(url)
 
         // Cascata de tentativas (sem pré-verificação: package visibility filtra
