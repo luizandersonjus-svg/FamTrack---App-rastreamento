@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,9 +62,14 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 private const val PLAYBACK_BASE_DURATION_MS = 30_000f
 private const val CAMERA_FOLLOW_MIN_INTERVAL_NS = 700_000_000L
 private const val STOP_PAUSE_MS = 600L
-private const val FINISH_RESET_DELAY_MS = 900L
 private const val STOP_DISTANCE_M = 15f
 private const val STOP_TIME_MS = 5 * 60_000L
+
+/**
+ * Máquina de estados do player. REPRODUZ uma única vez; FINISHED é terminal
+ * até o usuário escolher explicitamente "Ver novamente".
+ */
+internal enum class PlaybackState { READY, PLAYING, PAUSED, FINISHED }
 
 /** Velocidades disponíveis no seletor. */
 private val PLAYBACK_SPEEDS = floatArrayOf(1f, 2f, 4f)
@@ -105,12 +111,14 @@ internal class RoutePlaybackController internal constructor(
     val totalMeters: Float = if (hasRoute) cumulativeMeters.last().toFloat() else 0f
 
     var progress by mutableStateOf(0f)
-    var isPlaying by mutableStateOf(false)
-    var finished by mutableStateOf(false)
+    var state by mutableStateOf(PlaybackState.READY)
     var speed by mutableStateOf(1f)
     var stopMessage by mutableStateOf<String?>(null)
     var stopCount by mutableIntStateOf(0)
     var followAvatar by mutableStateOf(true)
+
+    val isFinished: Boolean
+        get() = state == PlaybackState.FINISHED
 
     val avatarMarker = MarkerState()
 
@@ -164,7 +172,7 @@ internal class RoutePlaybackController internal constructor(
     }
 
     fun advance(dtMillis: Float) {
-        if (!isPlaying || progress >= 1f) return
+        if (state != PlaybackState.PLAYING || progress >= 1f) return
         progress = (progress + dtMillis / PLAYBACK_BASE_DURATION_MS).coerceAtMost(1f)
         avatarMarker.position = positionFor(progress)
     }
@@ -172,43 +180,53 @@ internal class RoutePlaybackController internal constructor(
     fun seek(p: Float) {
         if (!hasRoute) return
         progress = p.coerceIn(0f, 1f)
-        finished = false
         stopMessage = null
+        // Arrastar o slider ainda em FINISHED rearma a reprodução.
+        if (state == PlaybackState.FINISHED && p < 1f) state = PlaybackState.READY
         avatarMarker.position = positionFor(progress)
     }
 
     fun togglePlayPause() {
         if (!hasRoute) return
-        if (isPlaying) {
-            isPlaying = false
-        } else {
-            if (finished) seek(0f)
-            isPlaying = true
+        when (state) {
+            PlaybackState.READY, PlaybackState.PAUSED -> state = PlaybackState.PLAYING
+            PlaybackState.PLAYING -> state = PlaybackState.PAUSED
+            // FINISHED não reinicia silenciosamente: só "Ver novamente".
+            PlaybackState.FINISHED -> {}
         }
     }
 
-    /** Conclui a reprodução (execução única, sem loop): para automático. */
+    /** Conclui a reprodução (execução única): o marcador PARA NO DESTINO. */
     fun finish() {
-        if (!isPlaying) return
-        isPlaying = false
-        finished = true
+        if (state != PlaybackState.PLAYING) return
+        progress = 1f
+        avatarMarker.position = positionFor(1f)
+        state = PlaybackState.FINISHED
         stopMessage = null
-        // Mantém o progresso em 1f por um instante (avatar no fim); a tela
-        // chama [returnToStart] após uma pequena pausa para voltar ao início.
     }
 
-    /** Volta o marcador ao início, mantendo o estado "finalizado". */
-    fun returnToStart() {
+    /** Pausa anunciada num trecho que parece parada (dist < 15m por > 5min). */
+    fun pauseAtStop(minutes: Long) {
+        stopMessage = minutes.toString()
+        state = PlaybackState.PAUSED
+        stopCount++
+    }
+
+    /** Retoma automaticamente 600ms após a parada anunciada. */
+    fun resumeFromStop() {
+        if (state == PlaybackState.PAUSED && stopMessage != null && progress < 1f) {
+            stopMessage = null
+            state = PlaybackState.PLAYING
+        }
+    }
+
+    /** Reinicia SEM reproduzir (READY, marcador na origem). Ação explícita. */
+    fun replay() {
+        if (!hasRoute) return
+        state = PlaybackState.READY
         stopMessage = null
         progress = 0f
-        if (hasRoute) avatarMarker.position = positionFor(0f)
-    }
-
-    fun restart() {
-        if (!hasRoute) return
-        isPlaying = false
-        seek(0f)
-        isPlaying = true
+        avatarMarker.position = positionFor(0f)
     }
 
     fun changeSpeed(newSpeed: Float) {
@@ -248,8 +266,8 @@ internal fun rememberRoutePlayback(
  */
 @Composable
 internal fun RoutePlaybackEngine(controller: RoutePlaybackController) {
-    LaunchedEffect(controller.isPlaying, controller.speed) {
-        if (!controller.isPlaying || !controller.hasRoute) return@LaunchedEffect
+    LaunchedEffect(controller.state, controller.speed) {
+        if (controller.state != PlaybackState.PLAYING || !controller.hasRoute) return@LaunchedEffect
         var lastFrameNanos = 0L
         var consumedIndex = -1
         while (true) {
@@ -270,9 +288,7 @@ internal fun RoutePlaybackEngine(controller: RoutePlaybackController) {
                     seg.startMillis > 0L && seg.endMillis > 0L &&
                     (seg.endMillis - seg.startMillis) > STOP_TIME_MS
                 ) {
-                    controller.stopMessage = ((seg.endMillis - seg.startMillis) / 60_000L).toString()
-                    controller.stopCount++
-                    controller.isPlaying = false
+                    controller.pauseAtStop((seg.endMillis - seg.startMillis) / 60_000L)
                     return@LaunchedEffect
                 }
             }
@@ -287,22 +303,7 @@ internal fun RoutePlaybackEngine(controller: RoutePlaybackController) {
     LaunchedEffect(controller.stopCount) {
         if (controller.stopCount > 0) {
             delay(STOP_PAUSE_MS)
-            controller.stopMessage = null
-            if (controller.progress < 1f && !controller.finished) {
-                controller.isPlaying = true
-            }
-        }
-    }
-
-    // Fim de execução única: pausa automaticamente ao chegar em 1f e, após uma
-    // pequena pausa, volta o marcador ao início — sem loop infinito. Se o usuário
-    // reproduzir de novo durante a pausa, o reset é abortado.
-    LaunchedEffect(controller.finished) {
-        if (controller.finished) {
-            delay(FINISH_RESET_DELAY_MS)
-            if (controller.finished && !controller.isPlaying) {
-                controller.returnToStart()
-            }
+            controller.resumeFromStop()
         }
     }
 }
@@ -327,13 +328,13 @@ internal fun RoutePlaybackCameraFollow(
                 }
             }
     }
-    LaunchedEffect(controller.followAvatar, controller.isPlaying) {
-        if (!controller.followAvatar || !controller.isPlaying) return@LaunchedEffect
+    LaunchedEffect(controller.followAvatar, controller.state) {
+        if (!controller.followAvatar || controller.state != PlaybackState.PLAYING) return@LaunchedEffect
         var lastMoveNanos = 0L
         while (true) {
             delay(400)
             val now = java.lang.System.nanoTime()
-            if (controller.followAvatar && controller.isPlaying &&
+            if (controller.followAvatar && controller.state == PlaybackState.PLAYING &&
                 now - lastMoveNanos >= CAMERA_FOLLOW_MIN_INTERVAL_NS
             ) {
                 lastMoveNanos = now
@@ -391,7 +392,8 @@ internal fun PlaybackMapLayers(
 @Composable
 internal fun RoutePlaybackControls(
     controller: RoutePlaybackController,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onClose: (() -> Unit)? = null
 ) {
     Surface(
         modifier = modifier
@@ -444,7 +446,7 @@ internal fun RoutePlaybackControls(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = when {
-                        controller.finished -> stringResource(R.string.playback_finished)
+                        controller.isFinished -> stringResource(R.string.playback_arrived)
                         controller.stopMessage != null -> stringResource(
                             R.string.playback_stopped,
                             controller.stopMessage.orEmpty()
@@ -454,7 +456,7 @@ internal fun RoutePlaybackControls(
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                     color = when {
-                        controller.finished -> MaterialTheme.colorScheme.primary
+                        controller.isFinished -> MaterialTheme.colorScheme.primary
                         controller.stopMessage != null -> MaterialTheme.colorScheme.tertiary
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
@@ -462,6 +464,34 @@ internal fun RoutePlaybackControls(
             }
 
             // Linha 2: controles compactos centralizados
+            if (controller.isFinished) {
+                // FINISHED = terminal. Ações explícitas "Ver novamente" (READY,
+                // sem autoplay) e "Fechar" (exibido apenas se a tela fornecer o
+                // callback; TripTimelineComponents continua intocado).
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = { controller.replay() }) {
+                        Icon(
+                            imageVector = Icons.Filled.Replay,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.playback_watch_again))
+                    }
+                    if (onClose != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = onClose) {
+                            Text(stringResource(R.string.playback_close))
+                        }
+                    }
+                }
+            } else {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -470,7 +500,7 @@ internal fun RoutePlaybackControls(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
-                    onClick = { controller.restart() },
+                    onClick = { controller.replay() },
                     modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
@@ -486,9 +516,9 @@ internal fun RoutePlaybackControls(
                     modifier = Modifier.size(44.dp)
                 ) {
                     Icon(
-                        imageVector = if (controller.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        imageVector = if (controller.state == PlaybackState.PLAYING) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = stringResource(
-                            if (controller.isPlaying) R.string.playback_pause else R.string.playback_play
+                            if (controller.state == PlaybackState.PLAYING) R.string.playback_pause else R.string.playback_play
                         ),
                         modifier = Modifier.size(28.dp),
                         tint = MaterialTheme.colorScheme.primary
@@ -528,6 +558,7 @@ internal fun RoutePlaybackControls(
                         }
                     )
                 }
+            }
             }
         }
     }

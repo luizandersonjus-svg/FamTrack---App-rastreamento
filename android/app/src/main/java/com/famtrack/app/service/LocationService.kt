@@ -20,12 +20,18 @@ import com.famtrack.app.FamTrackApp
 import com.famtrack.app.MainActivity
 import com.famtrack.app.R
 import com.famtrack.app.data.model.Geofence
-import com.famtrack.app.data.model.RoutePoint
+import com.famtrack.app.data.offline.RouteAnchor
+import com.famtrack.app.data.offline.RoutePointStore
+import com.famtrack.app.data.offline.RouteSyncCoordinator
+import com.famtrack.app.data.offline.StoredPoint
 import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
 import com.famtrack.app.data.remote.NotificationRepository
+import com.famtrack.app.data.remote.RouteSyncPermanentException
+import com.famtrack.app.data.remote.RouteSyncRetriableException
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.data.remote.routeSyncErrorCode
 import com.google.android.gms.location.*
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -68,11 +74,18 @@ class LocationService : Service() {
     private var lastKnownLocation: Location? = null
 
     // Amostragem do histórico de rota (Fase 1): último ponto gravado em memória
+    // (espelho da âncora persistente em RoutePointStore)
     private var lastRouteLat: Double? = null
     private var lastRouteLng: Double? = null
     private var lastRouteTime: Long = 0L
     private var lastRouteBearing: Float = 0f
     private var hasLastRouteBearing = false
+
+    // Fila offline durável + âncora persistente
+    private val routeStore by lazy { RoutePointStore(this) }
+
+    // Ao voltar de "compartilhamento pausado", o próximo fix vira novo primeiro ponto
+    private var resumeFromPause = false
 
     // Sensor de passos (STEP_COUNTER)
     private var sensorManager: SensorManager? = null
@@ -181,6 +194,10 @@ class LocationService : Service() {
             val notification = createNotification()
             // Foreground obrigatório ANTES de qualquer operação de localização/rede.
             startForeground(NOTIFICATION_ID, notification)
+            // Restaura a âncora persistida para o usuário/família atuais (sobrevive
+            // a restart do processo) e agenda a drenagem de pontos remanescentes.
+            restoreRouteAnchor()
+            enqueueRouteSync(applicationContext)
             refreshGeofenceCache()
             startGeofenceCacheRefreshLoop()
             startLocationUpdates()
@@ -269,19 +286,30 @@ class LocationService : Service() {
             override fun onLocationResult(result: LocationResult) {
                 try {
                     Log.d(FAM_TRACK_ROUTE_TAG, "fix recebido")
-                    result.lastLocation?.let { location ->
+result.lastLocation?.let { location ->
                         lastKnownLocation = location
                         // Política de privacidade: pausado, nada é enviado ao backend.
                         if (isSharingPaused()) {
-                            Log.d(FAM_TRACK_ROUTE_TAG, "rota: ignorado por compartilhamento pausado")
+                            resumeFromPause = true
+                            Log.d(FAM_TRACK_ROUTE_TAG, "ponto ignorado: compartilhamento pausado")
                         } else {
+                            // Ao sair da pausa, o próximo fix vira novo primeiro ponto
+                            // (âncora antiga invalidadas para não "puxar" o novo trajeto).
+                            if (resumeFromPause) {
+                                resumeFromPause = false
+                                lastRouteLat = null
+                                lastRouteLng = null
+                                lastRouteTime = 0L
+                                hasLastRouteBearing = false
+                                routeStore.invalidateAnchor()
+                            }
                             // Caminhos INDEPENDENTES: falha no feed ao vivo (locations) não
                             // impede a gravação em route_history e vice-versa — cada um tem
                             // try/catch próprio em sua própria coroutine.
                             sendLocationToSupabase(location)
                             saveRoutePoint(location)
+                            checkGeofences(location)
                         }
-                        checkGeofences(location)
                     }
                 } catch (e: Exception) {
                     // Main thread (callback): qualquer inesperado aqui NÃO pode derrubar o app.
@@ -420,9 +448,10 @@ class LocationService : Service() {
     }
 
     /**
-     * Grava um ponto no histórico de rota quando a amostragem decide. Falha de
-     * rede/servidor: Log.w, NÃO atualiza o lastSavedPoint (o próximo fix tenta
-     * de novo) e NUNCA para o serviço nem afeta o feed ao vivo.
+     * Grava um ponto no histórico de rota quando a amostragem decide. O ponto é
+     * aceito na FILA LOCAL (persistente) — sucesso independe de internet. Em
+     * seguida tenta sincronizar imediatamente e agenda o Worker se sobrar fila.
+     * Falhas nunca param o serviço nem afetam o feed ao vivo.
      */
     private fun saveRoutePoint(location: Location) {
         val familyId = currentFamilyId ?: return
@@ -437,7 +466,7 @@ class LocationService : Service() {
             false
         }
         if (!shouldRecord) {
-            Log.d(FAM_TRACK_ROUTE_TAG, "rota: ignorado por amostragem")
+            Log.d(FAM_TRACK_ROUTE_TAG, "ponto ignorado por amostragem")
             return
         }
 
@@ -446,45 +475,86 @@ class LocationService : Service() {
                 val rawBattery = (getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager)
                     ?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
                 val batteryLevel = rawBattery?.takeIf { it in 0..100 }
-                val routePoint = RoutePoint(
-                    family_id = familyId,
-                    user_id = userId,
+                val stored = StoredPoint(
+                    id = java.util.UUID.randomUUID().toString(),
+                    familyId = familyId,
+                    userId = userId,
                     latitude = location.latitude,
                     longitude = location.longitude,
-                    recorded_at = java.time.Instant.ofEpochMilli(location.time).toString(),
+                    recordedAt = java.time.Instant.ofEpochMilli(location.time).toString(),
                     accuracy = location.accuracy.takeIf { it > 0f },
                     speed = if (location.hasSpeed()) location.speed else null,
                     bearing = if (location.hasBearing()) location.bearing else null,
                     batteryLevel = batteryLevel,
                     provider = location.provider
                 )
-                val saved = locationRepository.saveRoutePoint(routePoint)
-                // Sucesso (insert completo ou fallback mínimo): atualiza o ponto de
-                // referência da amostragem para o próximo fix continuar a rota.
-                if (saved) {
-                    val firstPoint = lastRouteLat == null || lastRouteLng == null
-                    lastRouteLat = location.latitude
-                    lastRouteLng = location.longitude
-                    lastRouteTime = location.time
-                    lastRouteBearing = location.bearing
-                    hasLastRouteBearing = location.hasBearing()
-                    Log.d(
-                        FAM_TRACK_ROUTE_TAG,
-                        if (firstPoint) "rota: primeiro ponto salvo" else "rota: ponto salvo"
-                    )
-                } else {
-                    Log.w(
-                        FAM_TRACK_ROUTE_TAG,
-                        "Ponto de rota descartado: insert completo e fallback mínimo falharam"
-                    )
+                routeStore.enqueue(stored)
+                advanceRouteAnchor(familyId, userId, location)
+                Log.d(FAM_TRACK_ROUTE_TAG, "ponto aceito na fila")
+                try {
+                    RouteSyncCoordinator.trySync(routeStore, locationRepository)
+                } catch (e: RouteSyncRetriableException) {
+                    Log.d(FAM_TRACK_ROUTE_TAG, "sincronização adiada: rede indisponível")
+                } catch (e: RouteSyncPermanentException) {
+                    Log.w(FAM_TRACK_ROUTE_TAG, "falha permanente: ${routeSyncErrorCode(e)}")
+                }
+                val pending = routeStore.pendingCountFor(userId)
+                if (pending > 0) {
+                    Log.d(FAM_TRACK_ROUTE_TAG, "fila pendente: quantidade=$pending")
+                    enqueueRouteSync(applicationContext)
                 }
             } catch (e: Exception) {
                 Log.w(
                     FAM_TRACK_ROUTE_TAG,
-                    "rota: falha ao salvar: ${shortMessage(e)}"
+                    "ponto não aceito na fila: ${shortMessage(e)}"
                 )
             }
         }
+    }
+
+    /** Recarrega a âncora persistida do usuário/família atuais (sobrevive ao restart). */
+    private fun restoreRouteAnchor() {
+        val familyId = currentFamilyId ?: return
+        val userId = currentUserId ?: return
+        val anchor = routeStore.loadAnchor(familyId, userId)
+        if (anchor != null) {
+            lastRouteLat = anchor.latitude
+            lastRouteLng = anchor.longitude
+            lastRouteTime = anchor.timeMillis
+            lastRouteBearing = anchor.bearing
+            hasLastRouteBearing = anchor.hasBearing
+            Log.d(FAM_TRACK_ROUTE_TAG, "âncora restaurada")
+        } else {
+            lastRouteLat = null
+            lastRouteLng = null
+            lastRouteTime = 0L
+            hasLastRouteBearing = false
+        }
+    }
+
+    /** Avança a âncora (memória + persistida) após o ponto ser aceito na fila. */
+    private fun advanceRouteAnchor(familyId: String, userId: String, location: Location) {
+        val firstPoint = lastRouteLat == null || lastRouteLng == null
+        lastRouteLat = location.latitude
+        lastRouteLng = location.longitude
+        lastRouteTime = location.time
+        lastRouteBearing = location.bearing
+        hasLastRouteBearing = location.hasBearing()
+        routeStore.saveAnchor(
+            RouteAnchor(
+                familyId = familyId,
+                userId = userId,
+                latitude = location.latitude,
+                longitude = location.longitude,
+                timeMillis = location.time,
+                bearing = location.bearing,
+                hasBearing = location.hasBearing()
+            )
+        )
+        Log.d(
+            FAM_TRACK_ROUTE_TAG,
+            if (firstPoint) "ponto aceito na fila (início da rota)" else "ponto aceito na fila"
+        )
     }
 
     /** Mensagem curta e sem dados sensíveis para logs de rota. */
@@ -713,26 +783,24 @@ class LocationService : Service() {
 
         // Amostragem do histórico de rota (Fase 1)
         private const val ROUTE_MIN_DISTANCE_FLOOR_M = 20.0
-        // Accuracy máxima para valer nas regras de forma da rota (B/C); acima
-        // disso o ponto só é gravado pela regra de permanência D (60s).
+        // Accuracy máxima para valer nas regras de forma da rota; acima disso o
+        // ponto só é gravado pela regra de permanência (heartbeat em 60s).
         private const val ROUTE_MAX_ACCURACY_M = 150.0
         private const val ROUTE_MIN_TIME_MS = 20_000L
-        private const val ROUTE_CURVE_TURN_DEG = 30.0
-        private const val ROUTE_CURVE_MIN_DISTANCE_M = 10.0
+        private const val ROUTE_CURVE_TURN_DEG = 25.0
+        private const val ROUTE_CURVE_MIN_DISTANCE_M = 5.0
         private const val ROUTE_CURVE_MIN_TIME_MS = 5_000L
         private const val ROUTE_CURVE_MIN_SPEED_MS = 1.0
         // Garante ao menos 1 ponto por minuto com fix válido (também parado/lento).
         private const val ROUTE_HEARTBEAT_MS = 60_000L
 
-        // Limiares densos quando em movimento (velocidade > 1 m/s): mais pontos
-        // em deslocamento para desenhar curvas sem o efeito "linha reta". Caminhada
-        // normal (≈1,4 m/s) é tratada como movimento para o percurso curto não ser
-        // descartado integralmente pelos limiares de parado.
+        // Limiares densos quando em movimento (velocidade > 1 m/s): >= 12s e >= 10m
+        // para deslocamento; curva > 25° com >= 5m para registrar viradas.
         private const val ROUTE_MOVING_SPEED_MS = 1.0
         private const val FAST_ROUTE_MIN_DISTANCE_M = 10.0
-        private const val FAST_ROUTE_MIN_TIME_MS = 8_000L
-        private const val FAST_CURVE_TURN_DEG = 15.0
-        private const val FAST_CURVE_MIN_DISTANCE_M = 8.0
+        private const val FAST_ROUTE_MIN_TIME_MS = 12_000L
+        private const val FAST_CURVE_TURN_DEG = 25.0
+        private const val FAST_CURVE_MIN_DISTANCE_M = 5.0
 
         fun startService(
             context: android.content.Context,

@@ -1071,6 +1071,7 @@ internal fun TripPlayerScreen(
         if (playback.hasRoute) {
             RoutePlaybackControls(
                 controller = playback,
+                onClose = onClose,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         } else {
