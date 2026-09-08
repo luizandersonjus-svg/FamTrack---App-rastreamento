@@ -72,6 +72,10 @@ class LocationRepository {
                     eq("user_id", userId)
                 }
                 order("created_at", Order.DESCENDING)
+                // Limite 1: atualiza sempre a linha mais recente daquele usuário.
+                // Duplicatas antigas (idade pré-constraint única) não travam mais o
+                // upsert — sem ele, decodeSingleOrNull lançava e o feed congelava.
+                range(0, 0)
             }
             .decodeSingleOrNull<Location>()
     }

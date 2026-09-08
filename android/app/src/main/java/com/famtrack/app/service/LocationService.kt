@@ -3,6 +3,7 @@ package com.famtrack.app.service
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
@@ -820,6 +821,24 @@ result.lastLocation?.let { location ->
                 action = ACTION_STOP
             }
             context.startService(intent)
+        }
+
+        /** Últimas ids persistidas (sobrevivem a reboot/matança do processo). */
+        fun lastPersistedIds(context: Context): Pair<String, String>? {
+            val prefs = context.getSharedPreferences(SERVICE_PREFS, Context.MODE_PRIVATE)
+            val fid = prefs.getString(KEY_FAMILY_ID, null) ?: return null
+            val uid = prefs.getString(KEY_USER_ID, null) ?: return null
+            return fid to uid
+        }
+
+        fun locationPermissionGranted(context: Context): Boolean {
+            val ctx = context.applicationContext
+            return ContextCompat.checkSelfPermission(
+                ctx, android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    ctx, android.Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
         }
     }
 }

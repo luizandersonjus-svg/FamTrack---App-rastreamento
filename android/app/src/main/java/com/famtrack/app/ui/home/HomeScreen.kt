@@ -76,6 +76,7 @@ import com.famtrack.app.feature.sos.SosDeepLink
 import com.famtrack.app.feature.sos.SosFix
 import com.famtrack.app.feature.sos.LocationFixStore
 import com.famtrack.app.service.GeofenceWorker
+import com.famtrack.app.service.KeepAliveWorker
 import com.famtrack.app.service.LocationService
 import io.github.jan.supabase.auth.auth
 import com.google.android.gms.location.*
@@ -172,6 +173,9 @@ fun HomeScreen(
                 ExistingPeriodicWorkPolicy.KEEP,
                 workRequest
             )
+            // Watchdog do rastreamento: rearma o LocationService periodicamente
+            // (cobre matança do processo por OEM/Doze, reboot e recentes swipes).
+            KeepAliveWorker.enqueue(context)
         }
     }
 

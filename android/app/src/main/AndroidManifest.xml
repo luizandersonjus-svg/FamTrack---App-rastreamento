@@ -10,9 +10,12 @@
     <!-- Reconhecimento de atividade (passos / meio de transporte) -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
 
-    <!-- Serviço em foreground (para localização em background) -->
+    <!-- Servi\u00e7o em foreground (para localiza\u00e7\u00e3o em background) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+    <!-- Reiniciar o rastreamento ap\u00f3s reiniciar o aparelho -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Notificações -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -76,6 +79,16 @@
             android:name=".service.LocationService"
             android:foregroundServiceType="location"
             android:exported="false" />
+
+        <receiver
+            android:name=".service.ServiceAutoStartReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
 
     </application>
 
