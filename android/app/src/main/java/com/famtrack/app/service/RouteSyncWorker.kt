@@ -5,9 +5,11 @@ import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.famtrack.app.data.offline.RoutePointStore
@@ -18,20 +20,31 @@ import com.famtrack.app.data.remote.RouteSyncRetriableException
 import com.famtrack.app.data.remote.routeSyncErrorCode
 import com.famtrack.app.data.remote.SupabaseClient
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.status.SessionStatus
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "FamTrackRoute"
+private const val SYNC_TAG = "FamTrackRouteSync"
 private const val BACKOFF_SEED_SECONDS = 30L
+private const val SESSION_WAIT_TIMEOUT_MS = 10_000L
+private const val PERIODIC_INTERVAL_MINUTES = 15L
 
 internal const val ROUTE_SYNC_WORK_NAME = "famtrack_route_sync"
+internal const val ROUTE_SYNC_PERIODIC_WORK_NAME = "famtrack_route_sync_periodic"
 
 /**
  * Drena a fila offline de route_history quando há internet. Envia no máximo
  * 20 pontos por execução e apenas os pontos do usuário autenticado atual.
  *
- * - falha de rede/timeout/5xx: mantém os pontos e retorna Result.retry() com
- *   backoff exponencial do WorkManager;
- * - falha permanente (auth/RLS): mantém os pontos e encerra de forma
- *   controlada (aguarda nova sessão), sem apagar nada.
+ * - sessão ainda em restauração (Initializing) ou não autenticada: aguarda até
+ *   SESSION_WAIT_TIMEOUT_MS antes de ler o usuário; se a sessão não ficar
+ *   pronta, retorna Result.retry() e NUNCA conclui "sucesso" sem ter drenado;
+ * - falha de rede/timeout/5xx/401/403/RLS: mantém os pontos e retorna
+ *   Result.retry() com backoff exponencial do WorkManager;
+ * - conflito (23505): tratado como já sincronizado, remove apenas esses id;
+ * - sucesso parcial: remove só os ids confirmados e reagenda o one-time.
  */
 class RouteSyncWorker(
     appContext: Context,
@@ -41,40 +54,85 @@ class RouteSyncWorker(
     override suspend fun doWork(): Result {
         val store = RoutePointStore(applicationContext)
         val repository = LocationRepository()
+        Log.d(SYNC_TAG, "worker inicio, fila=${store.pendingCount()}")
         return try {
+            val session = waitForSession()
+            Log.d(SYNC_TAG, "sessao=${session.javaClass.simpleName}")
+            val uid = when (session) {
+                is SessionStatus.Authenticated -> session.session.user?.id
+                else -> null
+            }
+            if (uid == null) {
+                Log.d(SYNC_TAG, "sessao indisponivel; reagendando")
+                return Result.retry()
+            }
+
             val ran = RouteSyncCoordinator.trySync(store, repository)
             if (!ran) return Result.retry()
-            val uid = try {
-                SupabaseClient.getInstance().auth.currentUserOrNull()?.id
-            } catch (e: Exception) {
-                null
-            }
-            if (uid != null && store.pendingCountFor(uid) > 0) {
+
+            val remaining = store.pendingCount()
+            if (store.pendingCountFor(uid) > 0) {
+                // Fila ainda não drenou por completo: reagenda o one-time já.
                 enqueueRouteSync(applicationContext)
+                Log.d(SYNC_TAG, "worker fim, fila restante=$remaining, reagendado")
+                return Result.success()
             }
+            Log.d(SYNC_TAG, "worker fim, fila restante=0, resultado=success")
             Result.success()
         } catch (e: RouteSyncRetriableException) {
-            Log.w(TAG, "sincronização adiada: rede indisponível")
+            Log.w(SYNC_TAG, "erro=retriable/${routeSyncErrorCode(e)}")
             Result.retry()
         } catch (e: RouteSyncPermanentException) {
-            Log.w(TAG, "falha permanente: ${routeSyncErrorCode(e)}")
-            Result.success()
+            Log.w(SYNC_TAG, "erro=permanente/${routeSyncErrorCode(e)}")
+            Result.retry()
         } catch (e: Exception) {
-            Log.w(TAG, "sincronização adiada: rede indisponível")
+            Log.w(SYNC_TAG, "erro=erro/${routeSyncErrorCode(e)}")
             Result.retry()
         }
     }
+
+    /**
+     * Aguarda a sessão sair do estado Initializing (restauração do storage).
+     * Timeout de 10s; depois disso o estado é considerado indisponível e o
+     * Worker retorna retry — a fila NUNCA é concluída com sessão ausente.
+     */
+    private suspend fun waitForSession(): SessionStatus {
+        val auth = SupabaseClient.getInstance().auth
+        val resolved = withTimeoutOrNull(SESSION_WAIT_TIMEOUT_MS) {
+            auth.sessionStatus.first { it !is SessionStatus.Initializing }
+        }
+        return resolved ?: SessionStatus.Initializing
+    }
 }
 
-/** Agenda (ou reaproveita) o trabalho único de sincronização de rota. */
+/** Agenda (ou substitui) o trabalho único de sincronização de rota. */
 internal fun enqueueRouteSync(context: Context) {
     val request = OneTimeWorkRequestBuilder<RouteSyncWorker>()
         .setConstraints(Constraints(NetworkType.CONNECTED))
-        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SEED_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SEED_SECONDS, TimeUnit.SECONDS)
         .build()
     WorkManager.getInstance(context).enqueueUniqueWork(
         ROUTE_SYNC_WORK_NAME,
-        ExistingWorkPolicy.KEEP,
+        ExistingWorkPolicy.REPLACE,
+        request
+    )
+}
+
+/**
+ * Tarefa periódica de 15 minutos (nome próprio, diferente do one-time).
+ * Mantém o KEEP: uma única ocorrência ativa, sem duplicar.
+ */
+internal fun enqueuePeriodicRouteSync(context: Context) {
+    val request = PeriodicWorkRequestBuilder<RouteSyncWorker>(
+        PERIODIC_INTERVAL_MINUTES,
+        TimeUnit.MINUTES
+    )
+        .setConstraints(Constraints(NetworkType.CONNECTED))
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SEED_SECONDS, TimeUnit.SECONDS)
+        .build()
+    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        ROUTE_SYNC_PERIODIC_WORK_NAME,
+        ExistingPeriodicWorkPolicy.KEEP,
         request
     )
 }

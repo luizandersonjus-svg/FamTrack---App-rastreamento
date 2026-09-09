@@ -8,8 +8,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 private const val TAG = "FamTrackRoute"
+private const val SYNC_TAG = "FamTrackRouteSync"
 private const val PREFS_NAME = "route_offline_store"
 private const val KEY_POINTS = "points"
+private const val KEY_QUARANTINE = "quarantine_points"
 private const val KEY_ANCHOR = "anchor"
 private const val MAX_QUEUED_POINTS = 500
 
@@ -91,6 +93,37 @@ internal class RoutePointStore(private val context: Context) {
             if (ids.isEmpty()) return
             val remaining = readList().filter { it.id !in ids }
             writeList(remaining)
+        }
+    }
+
+    /**
+     * Move para a quarentena os pontos cujo user_id diverge do usuário atual
+     * (irrecuperáveis pela drenagem normal). Nunca apaga: preserva para
+     * diagnóstico/relatório. Retorna a quantidade movida.
+     */
+    fun quarantineForeignPoints(currentUserId: String): Int = synchronized(lock) {
+        val points = readList()
+        val foreign = points.filter { it.userId != currentUserId }
+        if (foreign.isEmpty()) return 0
+        val foreignIds = foreign.map { it.id }.toSet()
+        val existing = readQuarantine()
+        prefs.edit().putString(KEY_QUARANTINE, json.encodeToString(existing + foreign)).commit()
+        writeList(points.filter { it.id !in foreignIds })
+        Log.w(SYNC_TAG, "quarentena: pontos com user id divergente movidos=${foreign.size}")
+        foreign.size
+    }
+
+    fun quarantineCount(): Int = synchronized(lock) {
+        readQuarantine().size
+    }
+
+    private fun readQuarantine(): List<StoredPoint> {
+        val raw = prefs.getString(KEY_QUARANTINE, null) ?: return emptyList()
+        return try {
+            json.decodeFromString<List<StoredPoint>>(raw)
+        } catch (e: Exception) {
+            Log.w(TAG, "quarentena corrompida: ${e.javaClass.simpleName}")
+            emptyList()
         }
     }
 

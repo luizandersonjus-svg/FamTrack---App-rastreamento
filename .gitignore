@@ -26,3 +26,6 @@ cert.bin
 *.log
 .DS_Store
 Thumbs.db
+
+# ===== Diagnóstico do dispositivo (logcat/dumps) =====
+diag/

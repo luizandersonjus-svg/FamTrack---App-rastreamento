@@ -211,8 +211,13 @@ class LocationRepository {
     internal suspend fun syncRouteQueue(store: RoutePointStore) {
         val uid = client.auth.currentUserOrNull()?.id
             ?: throw RouteSyncPermanentException("sem sessão")
+        // Pontos de outro usuário não são descartáveis: vão para a quarentena.
+        store.quarantineForeignPoints(uid)
         val batch = store.snapshotFor(uid).take(MAX_SYNC_BATCH)
-        if (batch.isEmpty()) return
+        if (batch.isEmpty()) {
+            Log.d(SYNC_TAG, "lote enviado=0 ok=0")
+            return
+        }
 
         val synced = try {
             insertBatch(batch, enriched = true)
@@ -228,14 +233,19 @@ class LocationRepository {
                         resolveIndividual(batch, e2)
                     }
                 }
-                isConflictError(e) -> resolveIndividual(batch, e)
+                isConflictError(e) -> {
+                    Log.w(SYNC_TAG, "conflito 23505: individual")
+                    resolveIndividual(batch, e)
+                }
                 else -> throw classifyForSync(e)
             }
         }
 
         if (synced.isNotEmpty()) {
             store.removeSynced(synced)
-            Log.d(ROUTE_TAG, "sincronização concluída: quantidade=${synced.size}")
+            Log.d(SYNC_TAG, "lote enviado=${batch.size} ok=${synced.size}")
+        } else {
+            Log.d(SYNC_TAG, "lote enviado=${batch.size} ok=0")
         }
     }
 
@@ -343,6 +353,7 @@ class LocationRepository {
     companion object {
         private const val TAG = "LocationRepository"
         private const val ROUTE_TAG = "FamTrackRoute"
+        private const val SYNC_TAG = "FamTrackRouteSync"
         private const val ROUTE_PAGE_SIZE = 1000L
         private const val MAX_ROUTE_POINTS_PER_DAY = 20_000
         private const val MAX_SYNC_BATCH = 20

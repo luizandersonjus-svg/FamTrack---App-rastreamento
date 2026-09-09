@@ -8,7 +8,7 @@ import android.os.Build
 class FamTrackApp : Application() {
 
     companion object {
-        const val NOTIFICATION_CHANNEL_ID = "famtrack_location"
+        const val NOTIFICATION_CHANNEL_ID = "location_tracking"
         const val NOTIFICATION_CHANNEL_NAME = "Localizacao"
         const val GEOFENCE_CHANNEL_ID = "famtrack_geofence"
         const val GEOFENCE_CHANNEL_NAME = "Geofences"

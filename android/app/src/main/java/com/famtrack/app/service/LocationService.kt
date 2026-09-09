@@ -11,6 +11,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
+import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
@@ -188,17 +189,17 @@ class LocationService : Service() {
         try {
             if (trackingStarted) {
                 // Já em tracking: apenas reafirma o foreground (evita registrar updates 2x).
-                startForeground(NOTIFICATION_ID, createNotification())
+                startFg()
                 return
             }
             trackingStarted = true
-            val notification = createNotification()
             // Foreground obrigatório ANTES de qualquer operação de localização/rede.
-            startForeground(NOTIFICATION_ID, notification)
+            startFg()
             // Restaura a âncora persistida para o usuário/família atuais (sobrevive
             // a restart do processo) e agenda a drenagem de pontos remanescentes.
             restoreRouteAnchor()
             enqueueRouteSync(applicationContext)
+            enqueuePeriodicRouteSync(applicationContext)
             refreshGeofenceCache()
             startGeofenceCacheRefreshLoop()
             startLocationUpdates()
@@ -237,6 +238,20 @@ class LocationService : Service() {
             stopForeground(true)
         } catch (e: Exception) {
             Log.e(TAG, "Falha ao remover foreground", e)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun startFg() {
+        val notification = createNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
         }
     }
 
@@ -496,8 +511,10 @@ result.lastLocation?.let { location ->
                     RouteSyncCoordinator.trySync(routeStore, locationRepository)
                 } catch (e: RouteSyncRetriableException) {
                     Log.d(FAM_TRACK_ROUTE_TAG, "sincronização adiada: rede indisponível")
+                    enqueueRouteSync(applicationContext)
                 } catch (e: RouteSyncPermanentException) {
                     Log.w(FAM_TRACK_ROUTE_TAG, "falha permanente: ${routeSyncErrorCode(e)}")
+                    enqueueRouteSync(applicationContext)
                 }
                 val pending = routeStore.pendingCountFor(userId)
                 if (pending > 0) {
