@@ -9,8 +9,21 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
+import io.github.jan.supabase.postgrest.query.filter.FilterOperator
+import io.github.jan.supabase.realtime.PostgresAction
+import io.github.jan.supabase.realtime.channel
+import io.github.jan.supabase.realtime.postgresChangeFlow
+import io.github.jan.supabase.realtime.realtime
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 
@@ -63,6 +76,50 @@ class LocationRepository {
                 order("created_at", Order.DESCENDING)
             }
             .decodeList<Location>()
+    }
+
+    /**
+     * Canal Realtime da tabela `locations` filtrado por família (mesmo padrão
+     * do RealtimeAlertListener). Emite cada linha alterada (INSERT/UPDATE)
+     * como [Location]; o coletor (HomeScreen) fusiona na lista em memória.
+     * Reconexão automática a cada [REALTIME_RETRY_MS]; o fluxo termina quando
+     * o escopo de composição é destruído (removeChannel no finally).
+     */
+    fun observeFamilyLocations(familyId: String): Flow<Location> = flow {
+        while (currentCoroutineContext().isActive) {
+            val channel = client.channel("locations-$familyId")
+            try {
+                channel.subscribe()
+
+                channel
+                    .postgresChangeFlow<PostgresAction>(schema = "public") {
+                        table = "locations"
+                        filter("family_id", FilterOperator.EQ, familyId)
+                    }
+                    .collect { action ->
+                        when (action) {
+                            is PostgresAction.Insert -> emit(
+                                realtimeJson.decodeFromJsonElement<Location>(action.record)
+                            )
+                            is PostgresAction.Update -> emit(
+                                realtimeJson.decodeFromJsonElement<Location>(action.record)
+                            )
+                            else -> {}
+                        }
+                    }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro no canal realtime de locations", e)
+            } finally {
+                try {
+                    client.realtime.removeChannel(channel)
+                } catch (_: Exception) {
+                    // Ignora erro ao limpar canal morto.
+                }
+            }
+            delay(REALTIME_RETRY_MS)
+        }
     }
 
     suspend fun getRouteHistory(familyId: String, userId: String): List<RoutePoint> {
@@ -342,5 +399,8 @@ class LocationRepository {
         private const val ROUTE_PAGE_SIZE = 1000L
         private const val MAX_ROUTE_POINTS_PER_DAY = 20_000
         private const val MAX_SYNC_BATCH = 20
+        private const val REALTIME_RETRY_MS = 5000L
+
+        private val realtimeJson = Json { ignoreUnknownKeys = true }
     }
 }

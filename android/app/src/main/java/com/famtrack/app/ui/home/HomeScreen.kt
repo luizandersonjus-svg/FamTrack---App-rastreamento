@@ -312,18 +312,27 @@ fun HomeScreen(
             )
         }
     }
-    // Mantém o mapa atualizado: busca as posições dos membros a cada 10 segundos
+    // Localização em tempo real: o canal Realtime do Supabase empurra cada
+    // mudança de posição (INSERT/UPDATE) e o mapa reage sem poll a cada 3s.
+    // Cada evento é fusionado à lista em memória (uma linha por usuário).
+    LaunchedEffect(familyId) {
+        val fid = familyId ?: return@LaunchedEffect
+        locationRepository.observeFamilyLocations(fid).collect { updated ->
+            familyLocations = listOf(updated) +
+                familyLocations.filterNot { it.user_id == updated.user_id }
+        }
+    }
+
+    // Rede de segurança: se o Realtime cair silenciosamente, um refresh leve
+    // (apenas locations, 1 query) a cada 30s corrige a tela. As demais tabelas
+    // (geofences/places/flags) permanecem com a carga inicial; revalidação em
+    // foreground será tratada em etapa posterior.
     LaunchedEffect(familyId) {
         val fid = familyId ?: return@LaunchedEffect
         while (true) {
-            kotlinx.coroutines.delay(3_000)
+            kotlinx.coroutines.delay(30_000)
             try {
                 familyLocations = locationRepository.getFamilyLocations(fid)
-                activeSosAlerts = sosRepository.getActiveSosAlerts(fid)
-                geofences = geofenceRepository.getFamilyGeofences(fid)
-                places = PlacesRepository().getFamilyPlaces(fid)
-                flagByMember = PrivacyRepository().getMemberFlags(fid)
-                    .associateBy { it.user_id }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
