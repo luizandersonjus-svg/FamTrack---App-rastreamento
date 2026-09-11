@@ -19,16 +19,20 @@ import com.famtrack.app.data.remote.RouteSyncPermanentException
 import com.famtrack.app.data.remote.RouteSyncRetriableException
 import com.famtrack.app.data.remote.routeSyncErrorCode
 import com.famtrack.app.data.remote.SupabaseClient
+import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.status.SessionSource
 import io.github.jan.supabase.auth.status.SessionStatus
 import java.util.concurrent.TimeUnit
+import kotlin.time.ExperimentalTime
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "FamTrackRoute"
 private const val SYNC_TAG = "FamTrackRouteSync"
 private const val BACKOFF_SEED_SECONDS = 30L
-private const val SESSION_WAIT_TIMEOUT_MS = 10_000L
+private const val SESSION_WAIT_TIMEOUT_MS = 15_000L
+private const val REFRESH_EXPLICIT_TIMEOUT_MS = 10_000L
 private const val PERIODIC_INTERVAL_MINUTES = 15L
 
 internal const val ROUTE_SYNC_WORK_NAME = "famtrack_route_sync"
@@ -54,13 +58,16 @@ class RouteSyncWorker(
     override suspend fun doWork(): Result {
         val store = RoutePointStore(applicationContext)
         val repository = LocationRepository()
-        Log.d(SYNC_TAG, "worker inicio, fila=${store.pendingCount()}")
+        store.logQueueStats()
+        Log.d(SYNC_TAG, "worker inicio")
         return try {
             val session = waitForSession()
             Log.d(SYNC_TAG, "sessao=${session.javaClass.simpleName}")
             val uid = when (session) {
                 is SessionStatus.Authenticated -> session.session.user?.id
-                else -> null
+                is SessionStatus.Initializing -> restoreUidFromPersistedSession()
+                is SessionStatus.RefreshFailure,
+                is SessionStatus.NotAuthenticated -> null
             }
             if (uid == null) {
                 Log.d(SYNC_TAG, "sessao indisponivel; reagendando")
@@ -91,9 +98,9 @@ class RouteSyncWorker(
         }
     }
 
-    /**
+/**
      * Aguarda a sessão sair do estado Initializing (restauração do storage).
-     * Timeout de 10s; depois disso o estado é considerado indisponível e o
+     * Timeout de 15s; depois disso o estado é considerado indisponível e o
      * Worker retorna retry — a fila NUNCA é concluída com sessão ausente.
      */
     private suspend fun waitForSession(): SessionStatus {
@@ -102,6 +109,51 @@ class RouteSyncWorker(
             auth.sessionStatus.first { it !is SessionStatus.Initializing }
         }
         return resolved ?: SessionStatus.Initializing
+    }
+
+    /**
+     * Estado Initializing preso (refresh pendurado na lib): lê a sessão que
+     * ainda está gravada em storage e volta a usar o access token válido dela,
+     * sem depender do auto-refresh da lib. Devolve o user.id da sessão, ou
+     * null quando não há sessão persistida utilizável (=> Result.retry()).
+     */
+    @OptIn(ExperimentalTime::class)
+    private suspend fun restoreUidFromPersistedSession(): String? {
+        val auth = SupabaseClient.getInstance().auth
+        val persisted = try {
+            auth.sessionManager.loadSession()
+        } catch (e: Exception) {
+            Log.w(SYNC_TAG, "loadSession falhou: ${e.message}")
+            null
+        } ?: run {
+            Log.d(SYNC_TAG, "sem sessão persistida: retry")
+            return null
+        }
+
+        val valid = persisted.expiresAt.toEpochMilliseconds() > System.currentTimeMillis() + 60_000L
+        return if (valid) {
+            auth.importSession(persisted, autoRefresh = false, source = SessionSource.Storage)
+            Log.d(SYNC_TAG, "sessão via loadSession (válida)")
+            auth.currentUserOrNull()?.id
+        } else {
+            Log.d(SYNC_TAG, "sessão expirada: refresh explícito")
+            val refreshed = withTimeoutOrNull(REFRESH_EXPLICIT_TIMEOUT_MS) {
+                try {
+                    auth.refreshSession(persisted.refreshToken)
+                } catch (e: Exception) {
+                    Log.w(SYNC_TAG, "refresh explícito falhou: ${e.message}")
+                    null
+                }
+            }
+            if (refreshed == null) {
+                Log.w(SYNC_TAG, "refresh timeout: retry")
+                null
+            } else {
+                auth.importSession(refreshed, autoRefresh = false, source = SessionSource.Refresh(persisted))
+                Log.d(SYNC_TAG, "sessão via refresh explícito (válida)")
+                auth.currentUserOrNull()?.id
+            }
+        }
     }
 }
 

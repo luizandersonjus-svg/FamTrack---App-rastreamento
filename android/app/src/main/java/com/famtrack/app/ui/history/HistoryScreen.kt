@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -110,7 +111,7 @@ fun HistoryScreen(
     var dayVisits by remember { mutableStateOf<List<Visit>>(emptyList()) }
     var geofences by remember { mutableStateOf<List<Geofence>>(emptyList()) }
     var places by remember { mutableStateOf<List<Place>>(emptyList()) }
-    var speedAlertKmh by remember { mutableStateOf(readSpeedAlertPref(context)) }
+    val speedAlertKmh by speedAlertFlow(context).collectAsState(initial = readSpeedAlertPref(context))
     var playerSession by remember { mutableStateOf<PlayerSession?>(null) }
 
     LaunchedEffect(Unit) {
@@ -424,12 +425,7 @@ fun HistoryScreen(
                             }
 
                             TimelineControlsHeader(
-                                speedAlertKmh = speedAlertKmh,
                                 truncated = tripsResult.truncated,
-                                onSpeedLimitChange = { value ->
-                                    speedAlertKmh = value
-                                    writeSpeedAlertPref(context, value)
-                                },
                                 onRefresh = { reloadToken++ }
                             )
                             Spacer(modifier = Modifier.height(8.dp))

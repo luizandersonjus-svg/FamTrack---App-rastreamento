@@ -87,6 +87,18 @@ internal class RoutePointStore(private val context: Context) {
         readList().size
     }
 
+    /** Metadados de leitura da fila: tamanho atual e recorded_at do ponto mais recente. */
+    fun queueStats(): Pair<Int, String?> = synchronized(lock) {
+        val points = readList()
+        points.size to points.maxByOrNull { it.recordedAt ?: "" }?.recordedAt
+    }
+
+    /** Log de diagnóstico (só leitura): tamanho da fila e último recorded_at. */
+    fun logQueueStats() {
+        val (size, last) = queueStats()
+        Log.d(SYNC_TAG, "queue_size=$size last_recorded_at=$last")
+    }
+
     /* Remove SOMENTE os ids confirmados no servidor. */
     fun removeSynced(ids: Set<String>) {
         synchronized(lock) {

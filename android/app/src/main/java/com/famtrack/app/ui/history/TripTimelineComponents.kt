@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -27,8 +26,6 @@ import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +70,16 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -92,22 +100,31 @@ internal const val MAX_TRIP_POINTS = 5000
 private const val MIN_SEGMENT_DT_MS = 1_000L
 private const val MAX_PLAUSIBLE_KMH = 220.0
 
-// Limiar de alerta "possível excesso": configurável (40–100 km/h ou desativado),
-// persistido em SharedPreferences própria (não mexe em privacy_prefs).
-private const val DEFAULT_SPEED_ALERT_KMH = 60
-private const val SPEED_PREFS_NAME = "speed_alert_prefs"
-private const val SPEED_PREFS_KEY = "trip_speed_alert_kmh"
+// Limiar de alerta "possível excesso": configurável (40–80 km/h),
+// persistido em DataStore local (chave speed_alert_limit_kmh, padrão 50).
+private const val DEFAULT_SPEED_ALERT_KMH = 50
+private val Context.speedDataStore by preferencesDataStore(name = "speed_alert_prefs")
+private val SPEED_LIMIT_KEY = intPreferencesKey("speed_alert_limit_kmh")
 
-internal fun readSpeedAlertPref(context: Context): Int =
-    context.getSharedPreferences(SPEED_PREFS_NAME, Context.MODE_PRIVATE)
-        .getInt(SPEED_PREFS_KEY, DEFAULT_SPEED_ALERT_KMH)
+internal fun readSpeedAlertPref(context: Context): Int = runBlocking {
+    context.speedDataStore.data.first()[SPEED_LIMIT_KEY] ?: DEFAULT_SPEED_ALERT_KMH
+}
 
 internal fun writeSpeedAlertPref(context: Context, value: Int) {
-    context.getSharedPreferences(SPEED_PREFS_NAME, Context.MODE_PRIVATE)
-        .edit()
-        .putInt(SPEED_PREFS_KEY, value)
-        .apply()
+    CoroutineScope(Dispatchers.IO).launch {
+        context.speedDataStore.edit { prefs -> prefs[SPEED_LIMIT_KEY] = value }
+    }
 }
+
+internal fun speedAlertFlow(context: Context): Flow<Int> =
+    context.speedDataStore.data.map { prefs -> prefs[SPEED_LIMIT_KEY] ?: DEFAULT_SPEED_ALERT_KMH }
+
+// ---------------------------------------------------------------------------
+// Map Matching (OSRM) delegado a RouteMatchingModels.kt / RouteMatchingEngine.kt
+// ---------------------------------------------------------------------------
+
+/** Tolerância Douglas–Peucker para renderização (reduz pontos densos sem perder curvas). */
+private const val DISPLAY_EPSILON_METERS = 10.0
 
 /**
  * Resumo de um deslocamento entre duas paradas. [pointStart]/[pointEnd] são
@@ -334,20 +351,6 @@ internal fun computeRouteCenterAndZoom(points: List<LatLng>): Triple<Double, Dou
     return Triple(center.latitude, center.longitude, zoom)
 }
 
-/** Decimação simples (1 a cada k) para renderizar a Polyline — não altera os dados. */
-private fun decimate(points: List<RoutePoint>, target: Int): List<RoutePoint> {
-    if (points.size <= target) return points
-    val step = points.size.toDouble() / target.toDouble()
-    val result = mutableListOf<RoutePoint>()
-    var idx = 0.0
-    while (idx < points.size && result.size < target) {
-        result += points[idx.toInt()]
-        idx += step
-    }
-    if (result.lastOrNull() !== points.last()) result += points.last()
-    return result
-}
-
 @Composable
 private fun distanceText(totalDistance: Double?): String {
     if (totalDistance == null) return "—"
@@ -492,23 +495,15 @@ internal fun DayTimelineSummary(
 // Header de controles da linha do tempo (velocidade + refresh)
 // ---------------------------------------------------------------------------
 
+/**
+ * Header de controles da linha do tempo (refresh). Limite de velocidade
+ * agora é configurado em SettingsScreen e lido via DataStore.
+ */
 @Composable
 internal fun TimelineControlsHeader(
-    speedAlertKmh: Int,
     truncated: Boolean,
-    onSpeedLimitChange: (Int) -> Unit,
     onRefresh: () -> Unit
 ) {
-    val speedOptions = listOf(40, 50, 60, 80, 100, 0)
-    val speedLabelText: @Composable (Int) -> String = { opt ->
-        if (opt == 0) {
-            stringResource(R.string.history_speed_off)
-        } else {
-            stringResource(R.string.history_speed_label, opt)
-        }
-    }
-    var showSpeedMenu by remember { mutableStateOf(false) }
-
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -525,40 +520,6 @@ internal fun TimelineControlsHeader(
                 contentDescription = stringResource(R.string.history_trips_refresh),
                 tint = MaterialTheme.colorScheme.primary
             )
-        }
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = stringResource(R.string.history_speed_limit_title),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Box {
-            TextButton(onClick = { showSpeedMenu = true }) {
-                Text(
-                    text = speedLabelText(speedAlertKmh),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-            }
-            DropdownMenu(
-                expanded = showSpeedMenu,
-                onDismissRequest = { showSpeedMenu = false }
-            ) {
-                speedOptions.forEach { opt ->
-                    DropdownMenuItem(
-                        text = { Text(speedLabelText(opt)) },
-                        onClick = {
-                            showSpeedMenu = false
-                            onSpeedLimitChange(opt)
-                        }
-                    )
-                }
-            }
         }
     }
     if (truncated) {
@@ -756,12 +717,13 @@ private fun TripRouteThumbnail(
     avatarColor: Color,
     showThumbnail: Boolean
 ) {
-    val latLngs = remember(points) {
-        (if (points.size > 600) decimate(points, 600) else points)
-            .map { LatLng(it.latitude, it.longitude) }
+    val thumbPoints = remember(points) {
+        if (points.size > 600) douglasPeucker(points, DISPLAY_EPSILON_METERS) else points
     }
+    val displaySegments = remember(thumbPoints) { splitSegments(thumbPoints) }
+    val latLngs = remember(thumbPoints) { thumbPoints.map { LatLng(it.latitude, it.longitude) } }
 
-    if (!showThumbnail || latLngs.size < 2) {
+    if (!showThumbnail || displaySegments.none { it.size >= 2 }) {
         FallbackTripThumbnail()
         return
     }
@@ -801,11 +763,15 @@ private fun TripRouteThumbnail(
             compassEnabled = false
         )
     ) {
-        Polyline(
-            points = latLngs,
-            color = MaterialTheme.colorScheme.primary,
-            width = 5f
-        )
+        displaySegments.forEach { rawSeg ->
+            if (rawSeg.size >= 2) {
+                Polyline(
+                    points = rawSeg.map { LatLng(it.latitude, it.longitude) },
+                    color = MaterialTheme.colorScheme.primary,
+                    width = 5f
+                )
+            }
+        }
         val first = latLngs.first()
         val last = latLngs.last()
         Marker(
@@ -866,13 +832,20 @@ internal fun DayRouteMapCard(
     geofences: List<Geofence>,
     onPlay: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     val display = remember(orderedPoints) {
-        if (orderedPoints.size > 1200) decimate(orderedPoints, 1200) else orderedPoints
+        if (orderedPoints.size > 1200) douglasPeucker(orderedPoints, DISPLAY_EPSILON_METERS) else orderedPoints
     }
+    val rawDrawSegments = remember(display) { splitSegments(display) }
     val latLngs = remember(display) { display.map { LatLng(it.latitude, it.longitude) } }
+    var matchedResult by remember { mutableStateOf<MatchedRouteResult?>(null) }
     val camera = rememberCameraPositionState()
 
     LaunchedEffect(orderedPoints) {
+        matchedResult = null
+        if (orderedPoints.size >= 2) {
+            scope.launch { matchedResult = fetchMatchedRoute(orderedPoints) }
+        }
         if (latLngs.isNotEmpty()) {
             val (clat, clon, zoom) = computeRouteCenterAndZoom(latLngs)
             camera.animate(
@@ -922,12 +895,28 @@ internal fun DayRouteMapCard(
                     cameraPositionState = camera,
                     properties = MapProperties(mapType = MapType.NORMAL)
                 ) {
-                    if (latLngs.size >= 2) {
-                        Polyline(
-                            points = latLngs,
-                            color = MaterialTheme.colorScheme.primary,
-                            width = 6f
-                        )
+                    val segments = matchedResult?.segments
+                    val hasMatched = segments?.any { it.points.size >= 2 } == true
+                    if (hasMatched) {
+                        segments.forEach { seg ->
+                            if (seg.points.size >= 2) {
+                                Polyline(
+                                    points = seg.points,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    width = 6f
+                                )
+                            }
+                        }
+                    } else {
+                        rawDrawSegments.forEach { rawSeg ->
+                            if (rawSeg.size >= 2) {
+                                Polyline(
+                                    points = rawSeg.map { LatLng(it.latitude, it.longitude) },
+                                    color = MaterialTheme.colorScheme.primary,
+                                    width = 6f
+                                )
+                            }
+                        }
                     }
                     val first = orderedPoints.firstOrNull()
                     if (first != null) {
@@ -969,6 +958,12 @@ internal fun DayRouteMapCard(
                     }
                 }
             }
+            Text(
+                text = stringResource(R.string.osrm_attribution),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 6.dp)
+            )
         }
     }
 }
@@ -992,13 +987,20 @@ internal fun TripPlayerScreen(
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
     val playPoints = remember(points) {
-        if (points.size > 800) decimate(points, 800) else points
+        if (points.size > 800) douglasPeucker(points, DISPLAY_EPSILON_METERS) else points
     }
+    val rawPlaySegments = remember(playPoints) { splitSegments(playPoints) }
     val latLngs = remember(playPoints) { playPoints.map { LatLng(it.latitude, it.longitude) } }
+    var matchedResult by remember { mutableStateOf<MatchedRouteResult?>(null) }
     val playback = rememberRoutePlayback(playPoints, latLngs, memberName, primaryColor)
     val camera = rememberCameraPositionState()
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(playPoints) {
+        matchedResult = null
+        if (playPoints.size >= 2) {
+            scope.launch { matchedResult = fetchMatchedRoute(playPoints) }
+        }
         when {
             latLngs.size >= 2 -> {
                 val (clat, clon, zoom) = computeRouteCenterAndZoom(latLngs)
@@ -1022,12 +1024,28 @@ internal fun TripPlayerScreen(
             cameraPositionState = camera,
             properties = MapProperties(mapType = MapType.NORMAL)
         ) {
-            if (latLngs.size >= 2) {
-                Polyline(
-                    points = latLngs,
-                    color = primaryColor.copy(alpha = 0.35f),
-                    width = 6f
-                )
+            val segments = matchedResult?.segments
+            val hasMatched = segments?.any { it.points.size >= 2 } == true
+            if (hasMatched) {
+                segments.forEach { seg ->
+                    if (seg.points.size >= 2) {
+                        Polyline(
+                            points = seg.points,
+                            color = primaryColor.copy(alpha = 0.35f),
+                            width = 6f
+                        )
+                    }
+                }
+            } else {
+                rawPlaySegments.forEach { rawSeg ->
+                    if (rawSeg.size >= 2) {
+                        Polyline(
+                            points = rawSeg.map { LatLng(it.latitude, it.longitude) },
+                            color = primaryColor.copy(alpha = 0.35f),
+                            width = 6f
+                        )
+                    }
+                }
             }
             if (playback.hasRoute) {
                 PlaybackMapLayers(controller = playback, primaryColor = primaryColor)

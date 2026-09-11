@@ -34,6 +34,12 @@ import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.HealthConnectRepository
 import com.famtrack.app.data.remote.HeartRateSummary
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.feature.healthsnap.HealthSnapRepository
+import com.famtrack.app.feature.privacy.PrivacyPrefs
+import com.famtrack.app.feature.privacy.PrivacyRepository
+import com.famtrack.app.ui.history.readSpeedAlertPref
+import com.famtrack.app.ui.history.speedAlertFlow
+import com.famtrack.app.ui.history.writeSpeedAlertPref
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
 
@@ -45,13 +51,26 @@ fun SettingsScreen(
     onOpenRoutes: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var showProfileDialog by remember { mutableStateOf(false) }
     var showFamilyDialog by remember { mutableStateOf(false) }
-    var showPrivacyDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var showDevicesDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+
+    // Velocidade (DataStore)
+    val speedAlertKmh by speedAlertFlow(context).collectAsState(initial = readSpeedAlertPref(context))
+    val speedOptions = listOf(0, 40, 50, 60, 80)
+
+    // Privacidade (PrivacyRepository + PrivacyPrefs)
+    val privacyRepository = remember { PrivacyRepository() }
+    var sharingPaused by remember { mutableStateOf(false) }
+    var shareHealth by remember { mutableStateOf(false) }
+    var privacyLoading by remember { mutableStateOf(true) }
+    var privacySaving by remember { mutableStateOf(false) }
+    var privacyUserId by remember { mutableStateOf<String?>(null) }
+    var privacyFamilyId by remember { mutableStateOf<String?>(null) }
 
     // Conta logada no momento (nome do Google/salto, e-mail)
     val currentUser = remember {
@@ -70,8 +89,24 @@ fun SettingsScreen(
     if (showFamilyDialog) {
         FamilyDialog(onDismiss = { showFamilyDialog = false })
     }
-    if (showPrivacyDialog) {
-        PrivacyDialog(onDismiss = { showPrivacyDialog = false })
+    // Carrega flags de privacidade do Supabase
+    LaunchedEffect(Unit) {
+        privacyLoading = true
+        try {
+            val user = SupabaseClient.getInstance().auth.currentUserOrNull()
+            if (user != null) {
+                privacyUserId = user.id
+                val member = FamilyRepository().getUserFamily(user.id)
+                privacyFamilyId = member?.family_id
+                val flags = privacyRepository.getMyFlags(user.id)
+                sharingPaused = flags?.sharing_paused ?: PrivacyPrefs.isSharingPaused(context)
+                shareHealth = flags?.share_health ?: PrivacyPrefs.isSharingHealth(context)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            privacyLoading = false
+        }
     }
     if (showAboutDialog) {
         AboutDialog(onDismiss = { showAboutDialog = false })
@@ -201,12 +236,106 @@ fun SettingsScreen(
                         subtitle = "Gerenciar membros da familia",
                         onClick = { showFamilyDialog = true }
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = stringResource(R.string.settings_speed_section_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = stringResource(R.string.settings_speed_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        speedOptions.forEach { opt ->
+                            FilterChip(
+                                selected = speedAlertKmh == opt,
+                                onClick = { writeSpeedAlertPref(context, opt) },
+                                label = {
+                                    Text(
+                                        if (opt == 0) stringResource(R.string.history_speed_off)
+                                        else stringResource(R.string.history_speed_label, opt)
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = stringResource(R.string.settings_privacy_section_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column {
+                    SettingsSwitchItem(
+                        icon = Icons.Default.Share,
+                        title = stringResource(R.string.privacy_sharing_title),
+                        subtitle = stringResource(R.string.privacy_sharing_desc),
+                        checked = !sharingPaused,
+                        onCheckedChange = { newValue ->
+                            val uid = privacyUserId ?: return@SettingsSwitchItem
+                            val paused = !newValue
+                            sharingPaused = paused
+                            PrivacyPrefs.setSharingPaused(context, paused)
+                            scope.launch {
+                                privacySaving = true
+                                try {
+                                    privacyRepository.setSharingPaused(uid, paused)
+                                } catch (_: Exception) { }
+                                privacySaving = false
+                            }
+                        }
+                    )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    SettingsItem(
-                        icon = Icons.Default.Security,
-                        title = "Privacidade",
-                        subtitle = "Configuracoes de privacidade",
-                        onClick = { showPrivacyDialog = true }
+                    SettingsSwitchItem(
+                        icon = Icons.Default.HealthAndSafety,
+                        title = stringResource(R.string.privacy_health_title),
+                        subtitle = stringResource(R.string.privacy_health_desc),
+                        checked = shareHealth,
+                        onCheckedChange = { newValue ->
+                            val uid = privacyUserId ?: return@SettingsSwitchItem
+                            val fid = privacyFamilyId
+                            shareHealth = newValue
+                            PrivacyPrefs.setShareHealth(context, newValue)
+                            scope.launch {
+                                privacySaving = true
+                                try {
+                                    privacyRepository.setShareHealth(uid, newValue)
+                                    if (newValue && fid != null) {
+                                        HealthSnapRepository(context).syncOwnToday(fid, uid)
+                                    }
+                                } catch (_: Exception) { }
+                                privacySaving = false
+                            }
+                        }
                     )
                 }
             }

@@ -12,6 +12,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.location.Location
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
@@ -74,6 +75,19 @@ class LocationService : Service() {
 
     // Última localização conhecida (usada pelo sensor de passos)
     private var lastKnownLocation: Location? = null
+
+    // Heartbeat de fix: último timestamp em que o FLP entregou um fix
+    // (System.currentTimeMillis). O Handler periódico detecta silêncio do GPS
+    // (Doze/One UI) e reinicia o contrato do FusedLocationProvider.
+    private var lastFixTime = 0L
+
+    // Flags de diagnóstico do heartbeat (evitam repetir log a cada 60s).
+    private var fixHeartbeatAttempted = false
+    private var fixSilentWarned = false
+    private var fixDozeLogged = false
+
+    private val fixHeartbeatHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val fixHeartbeatRunnable = Runnable { checkFixHeartbeat() }
 
     // Amostragem do histórico de rota (Fase 1): último ponto gravado em memória
     // (espelho da âncora persistente em RoutePointStore)
@@ -302,6 +316,10 @@ class LocationService : Service() {
             override fun onLocationResult(result: LocationResult) {
                 try {
                     Log.d(FAM_TRACK_ROUTE_TAG, "fix recebido")
+                    lastFixTime = System.currentTimeMillis()
+                    fixHeartbeatAttempted = false
+                    fixSilentWarned = false
+                    fixDozeLogged = false
 result.lastLocation?.let { location ->
                         lastKnownLocation = location
                         // Política de privacidade: pausado, nada é enviado ao backend.
@@ -341,6 +359,11 @@ result.lastLocation?.let { location ->
                 locationCallback,
                 Looper.getMainLooper()
             )
+            lastFixTime = System.currentTimeMillis()
+            fixHeartbeatAttempted = false
+            fixSilentWarned = false
+            fixDozeLogged = false
+            startFixHeartbeat()
         } catch (e: SecurityException) {
             Log.e(TAG, "Sem permissão para registrar updates", e)
         } catch (e: Exception) {
@@ -359,6 +382,75 @@ result.lastLocation?.let { location ->
                 Log.e(TAG, "Falha ao remover location updates", e)
             }
         }
+        stopFixHeartbeat()
+    }
+
+    /**
+     * Liga o Heartbeat de fix. A cada [HEARTBEAT_CHECK_MS] (60s) verifica se o
+     * FLP voltou a entregar fixes:
+     * - >120s sem fix: re-registra o FLP (remove + request com os mesmos
+     *   parâmetros) para reviver o contrato do FusedLocationProvider após o
+     *   Doze/One UI ter suspendido as entregas em background;
+     * - >180s sem fix: registra o GPS silenciado no log (serviço permanece
+     *   ativo, apenas informativo);
+     * - >240s sem fix: sinaliza possível Doze. NUNCA para o serviço, NUNCA
+     *   remove a notificação/FGS (type location) nem o callback.
+     */
+    private fun checkFixHeartbeat() {
+        if (!trackingStarted) return
+        val now = System.currentTimeMillis()
+        val since = now - lastFixTime
+        val callback = locationCallback ?: return
+
+        // (A) >120s sem fix: re-registra o FLP uma única vez por ciclo de
+        // silêncio (os flags são resetados quando um novo fix chega).
+        if (since >= HEARTBEAT_NUDGE_MS && !fixHeartbeatAttempted) {
+            fixHeartbeatAttempted = true
+            Log.w(FAM_TRACK_ROUTE_TAG, "sem fix por ${since / 1000}s; re-registrando FLP")
+            try {
+                locationClient.removeLocationUpdates(callback)
+                val locationRequest = LocationRequest.Builder(
+                    Priority.PRIORITY_HIGH_ACCURACY,
+                    UPDATE_INTERVAL_MS
+                ).apply {
+                    setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
+                    setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
+                    setWaitForAccurateLocation(true)
+                }.build()
+                locationClient.requestLocationUpdates(
+                    locationRequest,
+                    callback,
+                    Looper.getMainLooper()
+                )
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Sem permissão ao re-registrar FLP no heartbeat", e)
+            } catch (e: Exception) {
+                Log.e(TAG, "Falha ao re-registrar FLP no heartbeat", e)
+            }
+        }
+
+        // (C) >180s sem fix: log informativo único.
+        if (since >= 180_000L && !fixSilentWarned) {
+            fixSilentWarned = true
+            Log.w(FAM_TRACK_ROUTE_TAG, "GPS silenciado por Doze — serviço ainda ativo")
+        }
+
+        // (A) >240s sem fix: sinaliza possível Doze (log único).
+        if (since >= HEARTBEAT_SILENT_MS && !fixDozeLogged) {
+            fixDozeLogged = true
+            Log.w(FAM_TRACK_ROUTE_TAG, "sem fix após 240s, possível Doze")
+        }
+
+        fixHeartbeatHandler.postDelayed(fixHeartbeatRunnable, HEARTBEAT_CHECK_MS)
+    }
+
+    private fun startFixHeartbeat() {
+        fixHeartbeatHandler.removeCallbacks(fixHeartbeatRunnable)
+        fixHeartbeatHandler.postDelayed(fixHeartbeatRunnable, HEARTBEAT_CHECK_MS)
+    }
+
+    private fun stopFixHeartbeat() {
+        fixHeartbeatHandler.removeCallbacks(fixHeartbeatRunnable)
     }
 
     private fun sendLocationToSupabase(location: Location) {
@@ -770,6 +862,7 @@ result.lastLocation?.let { location ->
 
     override fun onDestroy() {
         super.onDestroy()
+        fixHeartbeatHandler.removeCallbacks(fixHeartbeatRunnable)
         stopLocationUpdates()
         unregisterStepSensor()
         serviceScope.cancel()
@@ -798,6 +891,13 @@ result.lastLocation?.let { location ->
         private const val UPDATE_INTERVAL_MS = 3000L
         private const val MIN_DISTANCE_METERS = 5f
         private const val GEOFENCE_CACHE_REFRESH_MS = 60000L
+
+        // Heartbeat de fix (Doze/One UI): após 2min sem fix re-registra o FLP;
+        // após 4min sinaliza no log que o GPS está silenciado. O serviço nunca é
+        // parado. A notificação (FGS) permanece, preservando o type location.
+        private const val HEARTBEAT_CHECK_MS = 60_000L
+        private const val HEARTBEAT_NUDGE_MS = 120_000L
+        private const val HEARTBEAT_SILENT_MS = 240_000L
 
         // Amostragem do histórico de rota (Fase 1)
         private const val ROUTE_MIN_DISTANCE_FLOOR_M = 20.0

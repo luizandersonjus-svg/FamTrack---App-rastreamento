@@ -17,7 +17,6 @@ import com.famtrack.app.feature.invite.InviteScreen
 import com.famtrack.app.feature.invite.JoinScreen
 import com.famtrack.app.feature.places.PlaceEditScreen
 import com.famtrack.app.feature.places.PlacesScreen
-import com.famtrack.app.feature.privacy.PrivacyScreen
 import com.famtrack.app.feature.routes.RouteSearchScreen
 import com.famtrack.app.ui.auth.LoginScreen
 import com.famtrack.app.ui.auth.RegisterScreen
@@ -126,7 +125,7 @@ fun FamTrackNavigation() {
                     navController.navigate("invite")
                 },
                 onNavigateToPrivacy = {
-                    navController.navigate("privacy")
+                    navController.navigate("settings")
                 },
                 onNavigateToRoutes = {
                     navController.navigate("routes")
@@ -178,14 +177,6 @@ fun FamTrackNavigation() {
 
         composable("invite") {
             InviteScreen(
-                onNavigateBack = {
-                    navController.popBackStack()
-                }
-            )
-        }
-
-        composable("privacy") {
-            PrivacyScreen(
                 onNavigateBack = {
                     navController.popBackStack()
                 }
