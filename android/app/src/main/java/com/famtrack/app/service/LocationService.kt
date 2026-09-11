@@ -86,6 +86,15 @@ class LocationService : Service() {
     private var fixSilentWarned = false
     private var fixDozeLogged = false
 
+    // ETAPA 3 — bateria: âncora do feed ao vivo (evita enviar a cada fix)
+    private var lastFeedLat: Double? = null
+    private var lastFeedLng: Double? = null
+    private var lastFeedTime = 0L
+
+    // ETAPA 3 — bateria: detecção de parado (alterna FLP denso x econômico)
+    private var stationarySince = 0L
+    private var isStationary = false
+
     private val fixHeartbeatHandler by lazy { Handler(Looper.getMainLooper()) }
     private val fixHeartbeatRunnable = Runnable { checkFixHeartbeat() }
 
@@ -294,14 +303,7 @@ class LocationService : Service() {
             // Já registrado (ex.: múltiplos ACTION_START); evita updates duplicados.
             return
         }
-        val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
-            UPDATE_INTERVAL_MS
-        ).apply {
-            setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
-            setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
-            setWaitForAccurateLocation(true)
-        }.build()
+        val locationRequest = buildLocationRequest()
 
         if (ContextCompat.checkSelfPermission(
                 this,
@@ -322,6 +324,8 @@ class LocationService : Service() {
                     fixDozeLogged = false
 result.lastLocation?.let { location ->
                         lastKnownLocation = location
+                        // ETAPA 3 — bateria: alterna cadência GPS (parado x em movimento)
+                        updateAdaptiveMode(location)
                         // Política de privacidade: pausado, nada é enviado ao backend.
                         if (isSharingPaused()) {
                             resumeFromPause = true
@@ -386,6 +390,85 @@ result.lastLocation?.let { location ->
     }
 
     /**
+     * Contrato FLP do modo atual (ETAPA 3 — bateria). Parado: econômico
+     * (BALANCED, 30s, 30m, sem esperar fix preciso); em movimento: denso
+     * (HIGH_ACCURACY, 3s, 5m, esperando fix preciso). Reutilizado na
+     * (re)registração normal e no heartbeat de fix.
+     */
+    private fun buildLocationRequest(): LocationRequest {
+        if (isStationary) {
+            return LocationRequest.Builder(
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                STILL_UPDATE_INTERVAL_MS
+            ).apply {
+                setMinUpdateDistanceMeters(STILL_MIN_DISTANCE_METERS)
+                setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
+                setWaitForAccurateLocation(false)
+            }.build()
+        }
+        return LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            UPDATE_INTERVAL_MS
+        ).apply {
+            setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
+            setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
+            setWaitForAccurateLocation(true)
+        }.build()
+    }
+
+    /** Re-registra o FLP com os parâmetros do modo atual (parado/em movimento). */
+    private fun applyAdaptiveRequest() {
+        val callback = locationCallback ?: return
+        try {
+            locationClient.removeLocationUpdates(callback)
+            locationClient.requestLocationUpdates(
+                buildLocationRequest(),
+                callback,
+                Looper.getMainLooper()
+            )
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Sem permissão ao alternar cadência FLP", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha ao alternar cadência FLP", e)
+        }
+    }
+
+    /** O fix atual indica movimento (velocidade reportada ou deslocamento real). */
+    private fun isMoving(location: Location): Boolean {
+        if (location.hasSpeed() && location.speed > ADAPTIVE_STILL_SPEED_MS) return true
+        val lat = lastFeedLat ?: return false
+        val lng = lastFeedLng ?: return false
+        val dist = FloatArray(1)
+        Location.distanceBetween(lat, lng, location.latitude, location.longitude, dist)
+        return dist[0] > ADAPTIVE_STILL_RADIUS_M
+    }
+
+    /**
+     * Alterna entre cadência densa e econômica: entra em modo parado após
+     * [ADAPTIVE_STILL_WINDOW_MS] sem movimento e volta ao modo denso no
+     * primeiro fix com movimento. O FLP é (re)registrado apenas nas transições.
+     */
+    private fun updateAdaptiveMode(location: Location) {
+        if (isMoving(location)) {
+            if (isStationary) {
+                isStationary = false
+                stationarySince = 0L
+                applyAdaptiveRequest()
+            }
+            return
+        }
+        val now = location.time
+        if (stationarySince == 0L) {
+            stationarySince = now
+            return
+        }
+        if (!isStationary && now - stationarySince >= ADAPTIVE_STILL_WINDOW_MS) {
+            isStationary = true
+            applyAdaptiveRequest()
+        }
+    }
+
+    /**
      * Liga o Heartbeat de fix. A cada [HEARTBEAT_CHECK_MS] (60s) verifica se o
      * FLP voltou a entregar fixes:
      * - >120s sem fix: re-registra o FLP (remove + request com os mesmos
@@ -409,16 +492,8 @@ result.lastLocation?.let { location ->
             Log.w(FAM_TRACK_ROUTE_TAG, "sem fix por ${since / 1000}s; re-registrando FLP")
             try {
                 locationClient.removeLocationUpdates(callback)
-                val locationRequest = LocationRequest.Builder(
-                    Priority.PRIORITY_HIGH_ACCURACY,
-                    UPDATE_INTERVAL_MS
-                ).apply {
-                    setMinUpdateDistanceMeters(MIN_DISTANCE_METERS)
-                    setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
-                    setWaitForAccurateLocation(true)
-                }.build()
                 locationClient.requestLocationUpdates(
-                    locationRequest,
+                    buildLocationRequest(),
                     callback,
                     Looper.getMainLooper()
                 )
@@ -459,6 +534,11 @@ result.lastLocation?.let { location ->
         val familyId = currentFamilyId ?: return
         val userId = currentUserId ?: return
 
+        // ETAPA 3 — bateria: nem todo fix vira envio ao feed ao vivo. Envia quando
+        // houve deslocamento >= FEED_MIN_DISTANCE_M desde o último envio ou quando
+        // FEED_HEARTBEAT_MS decorreu (mantém lastUpdatedAt/bateria atualizados).
+        if (!shouldSendToFeed(location)) return
+
         serviceScope.launch {
             try {
                 val rawBattery = (getSystemService(BATTERY_SERVICE) as? android.os.BatteryManager)
@@ -477,11 +557,32 @@ result.lastLocation?.let { location ->
                 )
                 // Upsert: mantém apenas a localização mais recente por (family_id, user_id)
                 locationRepository.upsertLocation(famLocation)
+                // Só conta como enviado após sucesso: falha de rede é reavaliada no
+                // próximo fix sem descartar deslocamentos.
+                markFeedSent(location)
             } catch (e: Exception) {
                 // Falha de rede/Supabase: NÃO para o serviço; tenta de novo no próximo fix.
                 Log.e(TAG, "Falha ao enviar localização ao Supabase", e)
             }
         }
+    }
+
+    /** Decide se o fix atual merece ir ao feed ao vivo (distância ou tempo). */
+    private fun shouldSendToFeed(location: Location): Boolean {
+        val lastLat = lastFeedLat
+        val lastLng = lastFeedLng
+        if (lastLat == null || lastLng == null) return true
+        val elapsed = location.time - lastFeedTime
+        if (elapsed >= FEED_HEARTBEAT_MS) return true
+        val dist = FloatArray(1)
+        Location.distanceBetween(lastLat, lastLng, location.latitude, location.longitude, dist)
+        return dist[0] >= FEED_MIN_DISTANCE_M
+    }
+
+    private fun markFeedSent(location: Location) {
+        lastFeedLat = location.latitude
+        lastFeedLng = location.longitude
+        lastFeedTime = location.time
     }
 
     // F7: guarda única no ponto de envio — lê a preferência persistida pela tela de Privacidade
@@ -891,6 +992,23 @@ result.lastLocation?.let { location ->
         private const val UPDATE_INTERVAL_MS = 3000L
         private const val MIN_DISTANCE_METERS = 5f
         private const val GEOFENCE_CACHE_REFRESH_MS = 60000L
+
+        // ETAPA 3 — bateria: cadência adaptativa do GPS (parado x em movimento)
+        // Velocidade > este valor (m/s) já conta como movimento imediato.
+        private const val ADAPTIVE_STILL_SPEED_MS = 1.0
+        // Tempo parado (sem movimento acima de ADAPTIVE_STILL_RADIUS_M) para
+        // entrar no modo econômico.
+        private const val ADAPTIVE_STILL_WINDOW_MS = 60_000L
+        // Deslocamento desde o último envio que destrava o modo denso.
+        private const val ADAPTIVE_STILL_RADIUS_M = 20.0
+        // Contrato FLP do modo parado: intervalo e distância mínima maiores,
+        // prioridade BALANCED, sem espera de fix preciso (radar desligado).
+        private const val STILL_UPDATE_INTERVAL_MS = 30_000L
+        private const val STILL_MIN_DISTANCE_METERS = 30f
+
+        // ETAPA 3 — bateria: envio ao feed ao vivo não é a cada fix.
+        private const val FEED_MIN_DISTANCE_M = 15.0
+        private const val FEED_HEARTBEAT_MS = 45_000L
 
         // Heartbeat de fix (Doze/One UI): após 2min sem fix re-registra o FLP;
         // após 4min sinaliza no log que o GPS está silenciado. O serviço nunca é
