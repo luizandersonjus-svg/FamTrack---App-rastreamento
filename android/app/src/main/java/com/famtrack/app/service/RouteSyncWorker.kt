@@ -157,7 +157,7 @@ class RouteSyncWorker(
     }
 }
 
-/** Agenda (ou substitui) o trabalho único de sincronização de rota. */
+/** Agenda o trabalho único de sincronização de rota (sem duplicar o que já está na fila). */
 internal fun enqueueRouteSync(context: Context) {
     val request = OneTimeWorkRequestBuilder<RouteSyncWorker>()
         .setConstraints(Constraints(NetworkType.CONNECTED))
@@ -165,7 +165,7 @@ internal fun enqueueRouteSync(context: Context) {
         .build()
     WorkManager.getInstance(context).enqueueUniqueWork(
         ROUTE_SYNC_WORK_NAME,
-        ExistingWorkPolicy.REPLACE,
+        ExistingWorkPolicy.KEEP,
         request
     )
 }

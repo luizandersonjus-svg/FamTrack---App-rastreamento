@@ -13,6 +13,8 @@ private const val PREFS_NAME = "route_offline_store"
 private const val KEY_POINTS = "points"
 private const val KEY_QUARANTINE = "quarantine_points"
 private const val KEY_ANCHOR = "anchor"
+private const val MIGRATION_PREFS = "route_offline_migration"
+private const val KEY_POINTS_MIGRATED = "points_migrated"
 private const val MAX_QUEUED_POINTS = 500
 
 /**
@@ -50,46 +52,120 @@ internal data class RouteAnchor(
     val hasBearing: Boolean
 )
 
+/** Converte o DTO serializável para a entidade Room (ETAPA 5). */
+internal fun StoredPoint.toEntity(position: Long): StoredPointEntity =
+    StoredPointEntity(
+        id = id,
+        familyId = familyId,
+        userId = userId,
+        latitude = latitude,
+        longitude = longitude,
+        recordedAt = recordedAt,
+        accuracy = accuracy,
+        speed = speed,
+        bearing = bearing,
+        batteryLevel = batteryLevel,
+        provider = provider,
+        position = position
+    )
+
+/** Converte a entidade Room de volta para o DTO serializável. */
+internal fun StoredPointEntity.toStoredPoint(): StoredPoint =
+    StoredPoint(
+        id = id,
+        familyId = familyId,
+        userId = userId,
+        latitude = latitude,
+        longitude = longitude,
+        recordedAt = recordedAt,
+        accuracy = accuracy,
+        speed = speed,
+        bearing = bearing,
+        batteryLevel = batteryLevel,
+        provider = provider
+    )
+
 /**
- * Fila offline durável e limitada de pontos de rota + âncora persistente.
+ * Fila offline durável e limitada de pontos de rota (ETAPA 5).
  *
- * Persistência: SharedPreferences com JSON (mecanismo já usado no projeto, sem
- * dependência nova). Escrita e leitura devem ocorrer fora da thread principal
- * (as chamadas vêm de coroutines IO do LocationService e do Worker).
+ * Persistência: a FILA de pontos migrou de SharedPreferences/JSON para Room
+ * (SQLite tipado, tolerante a escrita concorrente). A âncora de amostragem e a
+ * quarentena continuam em SharedPreferences por serem metadados de uma única
+ * linha/rastreio, não componentes da fila.
  *
- * A fila sobrevive a morte do processo, recriação do serviço, perda/refora da
- * internet e bloqueio de tela. A gravação local bem-sucedida significa que o
- * ponto foi ACEITO para sincronização e não depende de rede.
+ * Migração única: na primeira utilização, os pontos ainda gravados no formato
+ * legado (prefs JSON) são importados para o Room e a chave legada é removida.
+ * Se a importação falhar, a fila simplesmente recomeça vazia (sem perda de
+ * crash — religar não duplica).
+ *
+ * Escrita e leitura devem ocorrer fora da thread principal (as chamadas vêm de
+ * coroutines IO do LocationService e do Worker). A fila sobrevive a morte do
+ * processo, recriação do serviço, perda/refora da internet e bloqueio de tela.
  */
 internal class RoutePointStore(private val context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val lock = Any()
     private val json = Json { ignoreUnknownKeys = true }
+    private val migrated = AtomicBoolean(false)
+
+    private val dao by lazy {
+        RouteTrackDatabase.getInstance(context.applicationContext).routePointDao()
+    }
+
+    /** Importa (uma única vez) a fila legada de SharedPreferences para o Room. */
+    private fun ensureReady() {
+        if (migrated.get()) return
+        synchronized(lock) {
+            if (migrated.get()) return
+            val migrationPrefs = context.getSharedPreferences(MIGRATION_PREFS, Context.MODE_PRIVATE)
+            if (!migrationPrefs.getBoolean(KEY_POINTS_MIGRATED, false)) {
+                val raw = prefs.getString(KEY_POINTS, null)
+                if (raw != null) {
+                    try {
+                        val points = json.decodeFromString<List<StoredPoint>>(raw)
+                        dao.insertAll(points.mapIndexed { index, p -> p.toEntity(index.toLong()) })
+                        Log.w(SYNC_TAG, "migração: pontos legados importados=${points.size}")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "migração: fila legada ilegível; recomeçando vazia: ${e.javaClass.simpleName}")
+                    }
+                    prefs.edit().remove(KEY_POINTS).apply()
+                }
+                migrationPrefs.edit().putBoolean(KEY_POINTS_MIGRATED, true).commit()
+            }
+            migrated.set(true)
+        }
+    }
 
     fun enqueue(point: StoredPoint) {
+        ensureReady()
         synchronized(lock) {
-            val merged = trimToLimit(readList() + point)
-            writeList(merged)
+            val existing = dao.all()
+            val merged = trimToLimit(existing + point.toEntity(existing.size.toLong()))
+            dao.insertAll(merged)
         }
     }
 
     /* Pontos de um usuário, em ordem cronológica. */
     fun snapshotFor(userId: String): List<StoredPoint> = synchronized(lock) {
-        readList().filter { it.userId == userId }
+        ensureReady()
+        dao.all().filter { it.userId == userId }.map { it.toStoredPoint() }
     }
 
     fun pendingCountFor(userId: String): Int = synchronized(lock) {
-        readList().count { it.userId == userId }
+        ensureReady()
+        dao.all().count { it.userId == userId }
     }
 
     fun pendingCount(): Int = synchronized(lock) {
-        readList().size
+        ensureReady()
+        dao.all().size
     }
 
     /** Metadados de leitura da fila: tamanho atual e recorded_at do ponto mais recente. */
     fun queueStats(): Pair<Int, String?> = synchronized(lock) {
-        val points = readList()
+        ensureReady()
+        val points = dao.all()
         points.size to points.maxByOrNull { it.recordedAt ?: "" }?.recordedAt
     }
 
@@ -101,10 +177,10 @@ internal class RoutePointStore(private val context: Context) {
 
     /* Remove SOMENTE os ids confirmados no servidor. */
     fun removeSynced(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        ensureReady()
         synchronized(lock) {
-            if (ids.isEmpty()) return
-            val remaining = readList().filter { it.id !in ids }
-            writeList(remaining)
+            dao.deleteByIds(ids.toList())
         }
     }
 
@@ -114,13 +190,16 @@ internal class RoutePointStore(private val context: Context) {
      * diagnóstico/relatório. Retorna a quantidade movida.
      */
     fun quarantineForeignPoints(currentUserId: String): Int = synchronized(lock) {
-        val points = readList()
+        ensureReady()
+        val points = dao.all().map { it.toStoredPoint() }
         val foreign = points.filter { it.userId != currentUserId }
         if (foreign.isEmpty()) return 0
         val foreignIds = foreign.map { it.id }.toSet()
         val existing = readQuarantine()
         prefs.edit().putString(KEY_QUARANTINE, json.encodeToString(existing + foreign)).commit()
-        writeList(points.filter { it.id !in foreignIds })
+        val remaining = points.filter { it.id !in foreignIds }
+        dao.clear()
+        dao.insertAll(remaining.mapIndexed { index, p -> p.toEntity(index.toLong()) })
         Log.w(SYNC_TAG, "quarentena: pontos com user id divergente movidos=${foreign.size}")
         foreign.size
     }
@@ -168,27 +247,12 @@ internal class RoutePointStore(private val context: Context) {
      * restantes; descarta intermediários na mesma ordem da coleta. Nunca limpa
      * a fila inteira.
      */
-    private fun trimToLimit(list: List<StoredPoint>): List<StoredPoint> {
+    private fun trimToLimit(list: List<StoredPointEntity>): List<StoredPointEntity> {
         if (list.isEmpty()) return list
         if (list.size <= MAX_QUEUED_POINTS) return list
         val head = list.first()
         val tail = list.drop(1).takeLast(MAX_QUEUED_POINTS - 2)
         return listOf(head) + tail + listOf(list.last())
-    }
-
-    private fun readList(): List<StoredPoint> {
-        val raw = prefs.getString(KEY_POINTS, null) ?: return emptyList()
-        return try {
-            json.decodeFromString<List<StoredPoint>>(raw)
-        } catch (e: Exception) {
-            Log.w(TAG, "fila corrompida: ${e.javaClass.simpleName}")
-            emptyList()
-        }
-    }
-
-    /* commit() síncrono: garante a sobrevivência da fila mesmo com morte do processo. */
-    private fun writeList(list: List<StoredPoint>) {
-        prefs.edit().putString(KEY_POINTS, json.encodeToString(list)).commit()
     }
 }
 

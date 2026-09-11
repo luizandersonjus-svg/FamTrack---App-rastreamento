@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.google.devtools.ksp")
 }
 
 android {
@@ -123,6 +124,10 @@ dependencies {
 
     // WorkManager (para tarefas em background)
     implementation("androidx.work:work-runtime-ktx:2.10.1")
+
+    // Room — fila offline de pontos de rota (ETAPA 5)
+    implementation("androidx.room:room-runtime:2.7.2")
+    ksp("androidx.room:room-compiler:2.7.2")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")
