@@ -7,6 +7,7 @@ import com.famtrack.app.data.offline.StoredPoint
 import android.util.Log
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.postgrest.from
+import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -30,27 +31,27 @@ class LocationRepository {
 
     private val client = SupabaseClient.getInstance()
 
-    suspend fun sendLocation(location: Location) {
-        client.from("locations").insert(location)
-    }
-
-    suspend fun updateLocation(location: Location) {
-        client.from("locations").update(location) {
-            filter {
-                eq("user_id", location.user_id)
-                eq("family_id", location.family_id)
-            }
-        }
-    }
-
+    /**
+     * Upsert atômico da localização atual via RPC (INSERT ... ON CONFLICT).
+     * Uma única chamada substitui o antigo padrão SELECT+UPDATE/INSERT,
+     * eliminando a corrida entre envios de fixes consecutivos. A RPC
+     * (security definer) valida que o usuário é membro aceito da família e
+     * que só altera a própria linha. Falhas propagam como exceção; o
+     * LocationService captura e tenta de novo no próximo fix.
+     */
     suspend fun upsertLocation(location: Location) {
-        // Mantém apenas a última localização por usuário: atualiza se já existe, senão insere
-        val existing = getUserLocation(location.family_id, location.user_id)
-        if (existing != null) {
-            updateLocation(location)
-        } else {
-            sendLocation(location)
+        val params = buildJsonObject {
+            put("p_family_id", location.family_id)
+            put("p_user_id", location.user_id)
+            put("p_latitude", location.latitude)
+            put("p_longitude", location.longitude)
+            location.accuracy?.let { put("p_accuracy", it) }
+            location.speed?.let { put("p_speed", it) }
+            location.bearing?.let { put("p_bearing", it) }
+            location.batteryLevel?.let { put("p_battery_level", it) }
+            location.lastUpdatedAt?.let { put("p_last_updated_at", it) }
         }
+        client.postgrest.rpc("rpc_upsert_location", params)
     }
 
     suspend fun getFamilyLocations(familyId: String): List<Location> {
@@ -62,22 +63,6 @@ class LocationRepository {
                 order("created_at", Order.DESCENDING)
             }
             .decodeList<Location>()
-    }
-
-    suspend fun getUserLocation(familyId: String, userId: String): Location? {
-        return client.from("locations")
-            .select {
-                filter {
-                    eq("family_id", familyId)
-                    eq("user_id", userId)
-                }
-                order("created_at", Order.DESCENDING)
-                // Limite 1: atualiza sempre a linha mais recente daquele usuário.
-                // Duplicatas antigas (idade pré-constraint única) não travam mais o
-                // upsert — sem ele, decodeSingleOrNull lançava e o feed congelava.
-                range(0, 0)
-            }
-            .decodeSingleOrNull<Location>()
     }
 
     suspend fun getRouteHistory(familyId: String, userId: String): List<RoutePoint> {
