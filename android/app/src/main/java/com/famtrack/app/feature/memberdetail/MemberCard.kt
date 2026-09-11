@@ -53,7 +53,8 @@ data class MemberCardInfo(
     val batteryLevel: Int?,
     val lastUpdatedMillis: Long?,
     val sharingPaused: Boolean,
-    val isSelf: Boolean = false
+    val isSelf: Boolean = false,
+    val signalLost: Boolean = false
 )
 
 /** Tempo desde a última atualização em texto humano ("há X min"). */
@@ -159,6 +160,16 @@ fun MemberCard(
                             text = stringResource(R.string.member_waiting_first_update),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else if (info.signalLost) {
+                        // ETAPA 7 — observabilidade: o serviço de quem compartilha
+                        // parou de enviar; alerta o tempo sem sinal em destaque.
+                        Text(
+                            text = stringResource(R.string.member_signal_lost) +
+                                " • " + lastUpdateLabel(context, info.lastUpdatedMillis),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
                         )
                     } else {
                         Text(

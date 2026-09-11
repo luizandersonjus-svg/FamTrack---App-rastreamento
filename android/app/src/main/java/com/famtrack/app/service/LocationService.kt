@@ -23,6 +23,7 @@ import com.famtrack.app.FamTrackApp
 import com.famtrack.app.MainActivity
 import com.famtrack.app.R
 import com.famtrack.app.data.model.Geofence
+import com.famtrack.app.data.observability.Telemetry
 import com.famtrack.app.data.offline.RouteAnchor
 import com.famtrack.app.data.offline.RoutePointStore
 import com.famtrack.app.data.offline.RouteSyncCoordinator
@@ -218,6 +219,8 @@ class LocationService : Service() {
             trackingStarted = true
             // Foreground obrigatório ANTES de qualquer operação de localização/rede.
             startFg()
+            // ETAPA 7 — observabilidade: batimento reforçado ao iniciar o tracking.
+            Telemetry.heartbeat(applicationContext)
             // Restaura a âncora persistida para o usuário/família atuais (sobrevive
             // a restart do processo) e agenda a drenagem de pontos remanescentes.
             restoreRouteAnchor()
@@ -318,6 +321,9 @@ class LocationService : Service() {
             override fun onLocationResult(result: LocationResult) {
                 try {
                     Log.d(FAM_TRACK_ROUTE_TAG, "fix recebido")
+                    // ETAPA 7 — observabilidade: batimento persistente a cada fix
+                    // (prova de vida da cadeia usado pelo watchdog do HealthCheckWorker).
+                    Telemetry.registerFix(applicationContext)
                     lastFixTime = System.currentTimeMillis()
                     fixHeartbeatAttempted = false
                     fixSilentWarned = false
@@ -560,9 +566,13 @@ result.lastLocation?.let { location ->
                 // Só conta como enviado após sucesso: falha de rede é reavaliada no
                 // próximo fix sem descartar deslocamentos.
                 markFeedSent(location)
+                // ETAPA 7 — observabilidade: upsert de locations bem-sucedido
+                // (atualiza também o último upsert, métrica da cadeia).
+                Telemetry.registerUpsert(applicationContext, true)
             } catch (e: Exception) {
                 // Falha de rede/Supabase: NÃO para o serviço; tenta de novo no próximo fix.
                 Log.e(TAG, "Falha ao enviar localização ao Supabase", e)
+                Telemetry.registerUpsert(applicationContext, false)
             }
         }
     }
@@ -702,11 +712,14 @@ result.lastLocation?.let { location ->
                 Log.d(FAM_TRACK_ROUTE_TAG, "ponto aceito na fila")
                 try {
                     RouteSyncCoordinator.trySync(routeStore, locationRepository)
+                    Telemetry.registerSync(true)
                 } catch (e: RouteSyncRetriableException) {
                     Log.d(FAM_TRACK_ROUTE_TAG, "sincronização adiada: rede indisponível")
+                    Telemetry.registerSync(false)
                     enqueueRouteSync(applicationContext)
                 } catch (e: RouteSyncPermanentException) {
                     Log.w(FAM_TRACK_ROUTE_TAG, "falha permanente: ${routeSyncErrorCode(e)}")
+                    Telemetry.registerSync(false)
                     enqueueRouteSync(applicationContext)
                 }
                 val pending = routeStore.pendingCountFor(userId)
@@ -812,6 +825,7 @@ result.lastLocation?.let { location ->
         serviceScope.launch {
             try {
                 val activeGeofences = cachedGeofences.filter { it.active }
+                var transitions = 0
 
                 for (geofence in activeGeofences) {
                     // Defensivo: geofence sem id não pode ser avaliada nem transicionada.
@@ -830,11 +844,13 @@ result.lastLocation?.let { location ->
                     val wasInside = isUserInsideGeofence(userId, geofenceId)
 
                     if (!wasInside && isInside) {
+                        transitions += 1
                         val title = geofence.name
                         val message = "Chegou em: ${geofence.name}"
                         sendGeofenceNotification(title, message, geofenceId.hashCode())
                         insertGeofenceNotification(familyId, userId, title, message)
                     } else if (wasInside && !isInside) {
+                        transitions += 1
                         val title = geofence.name
                         val message = "Saiu de: ${geofence.name}"
                         sendGeofenceNotification(title, message, geofenceId.hashCode() + 1)
@@ -843,6 +859,9 @@ result.lastLocation?.let { location ->
 
                     updateGeofenceState(userId, geofenceId, isInside)
                 }
+
+                // ETAPA 7 — observabilidade: transições de geofence avaliadas.
+                Telemetry.registerGeofence(transitions)
             } catch (e: Exception) {
                 // Nunca crasha por falha de rede/banco/estado na avaliação de geofences.
                 Log.e(TAG, "Falha protegida na avaliação de geofences: ${e.localizedMessage}")

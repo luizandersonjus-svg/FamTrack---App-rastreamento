@@ -91,6 +91,7 @@ import java.util.concurrent.TimeUnit
 
 private const val MAX_SOS_ACCURACY_METERS = 250.0
 private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
+private const val STALE_SIGNAL_MS = 15 * 60_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -151,6 +152,9 @@ fun HomeScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     var membersPanelExpanded by remember { mutableStateOf(false) }
     var skipNextCameraFollow by remember { mutableStateOf(false) }
+    // ETAPA 7 — observabilidade: relógio para reavaliar o "sinal cortado" dos
+    // membros (um membro sem atualizações não gera eventos de Realtime).
+    var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
 
     LaunchedEffect(Unit) {
         onboardingPending = !OnboardingPrefs.isDone(context)
@@ -387,6 +391,14 @@ fun HomeScreen(
                 name to LocationService.currentPlaceSteps
             }
             kotlinx.coroutines.delay(2000)
+        }
+    }
+
+    // ETAPA 7 — observabilidade: pulso de 30s para reavaliar staleness dos membros.
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowTick = System.currentTimeMillis()
+            kotlinx.coroutines.delay(30_000L)
         }
     }
 
@@ -1103,6 +1115,8 @@ fun HomeScreen(
                         ) {
                             items(carouselOrder, key = { it.user_id }) { loc ->
                                 val info = memberInfos[loc.user_id]
+                                val signalLost = loc.lastUpdatedAt != null &&
+                                    (nowTick - loc.lastUpdatedAt) > STALE_SIGNAL_MS
                                 MemberCard(
                                     info = MemberCardInfo(
                                         memberId = loc.user_id,
@@ -1112,7 +1126,8 @@ fun HomeScreen(
                                         batteryLevel = loc.batteryLevel,
                                         lastUpdatedMillis = loc.lastUpdatedAt,
                                         sharingPaused = flagByMember[loc.user_id]?.sharing_paused == true,
-                                        isSelf = loc.user_id == userId
+                                        isSelf = loc.user_id == userId,
+                                        signalLost = signalLost
                                     ),
                                     onClick = { selectedMember = loc },
                                     modifier = Modifier.width(240.dp)

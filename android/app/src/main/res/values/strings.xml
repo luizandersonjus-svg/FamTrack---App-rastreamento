@@ -167,6 +167,9 @@
     <string name="updated_unknown">sem atualização</string>
     <string name="member_you_badge">Você</string>
     <string name="member_waiting_first_update">Aguardando primeira atualização</string>
+    <string name="member_signal_lost">Sinal cortado</string>
+    <string name="health_restart_title">Rastreamento religado</string>
+    <string name="health_restart_text">O serviço de localização parou de enviar posições e foi reiniciado automaticamente.</string>
     <string name="settings_current_account_unknown">Conta conectada</string>
 
     <!-- Convite (F4) -->

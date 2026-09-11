@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import com.famtrack.app.data.remote.AuthCallbackState
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.feature.sos.SosDeepLink
+import com.famtrack.app.service.HealthCheckWorker
 import com.famtrack.app.service.LocationService
 import com.famtrack.app.ui.FamTrackNavigation
 import com.famtrack.app.ui.home.HomeDataRefresh
@@ -28,6 +29,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         handleAuthIntent(intent)
         handleSosExtra(intent)
+        // ETAPA 7 — observabilidade: watchdog (religa o serviço) + telemetria.
+        HealthCheckWorker.schedule(this)
         setContent {
             FamTrackTheme {
                 Surface(
