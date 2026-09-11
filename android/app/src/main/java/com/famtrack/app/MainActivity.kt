@@ -14,7 +14,9 @@ import androidx.lifecycle.lifecycleScope
 import com.famtrack.app.data.remote.AuthCallbackState
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.feature.sos.SosDeepLink
+import com.famtrack.app.service.LocationService
 import com.famtrack.app.ui.FamTrackNavigation
+import com.famtrack.app.ui.home.HomeDataRefresh
 import com.famtrack.app.ui.theme.FamTrackTheme
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.CancellationException
@@ -42,6 +44,31 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         handleAuthIntent(intent)
         handleSosExtra(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        revalidateTrackingState()
+        HomeDataRefresh.publish()
+    }
+
+    /**
+     * ETAPA 4 — stale/fresh: sempre que o app volta ao foreground (retorno das
+     * Configurações do sistema, de background, deep links), revalida o estado
+     * do compartilhamento:
+     * - permissão de localização concedida + compartilhamento NÃO pausado +
+     *   ids persistidos => garante o serviço de tracking rodando (idempotente);
+     * - conceder a permissão nas Configurações retoma o tracking sem depender
+     *   de reabrir a Home (ETAPA 0 - achado 9).
+     * Em qualquer outro cenário não faz nada, preservando a intenção do usuário
+     * (pausou, não tem família, sem permissão).
+     */
+    private fun revalidateTrackingState() {
+        if (!LocationService.locationPermissionGranted(this)) return
+        val prefs = getSharedPreferences("privacy_prefs", MODE_PRIVATE)
+        if (prefs.getBoolean("sharing_paused", false)) return
+        val ids = LocationService.lastPersistedIds(this) ?: return
+        LocationService.startService(this, ids.first, ids.second)
     }
 
     /** Consome os extras sos_lat/sos_lng (clique na notificação de SOS). */

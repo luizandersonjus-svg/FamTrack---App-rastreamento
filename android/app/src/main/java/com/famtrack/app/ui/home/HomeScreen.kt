@@ -326,13 +326,32 @@ fun HomeScreen(
     // Rede de segurança: se o Realtime cair silenciosamente, um refresh leve
     // (apenas locations, 1 query) a cada 30s corrige a tela. As demais tabelas
     // (geofences/places/flags) permanecem com a carga inicial; revalidação em
-    // foreground será tratada em etapa posterior.
+    // foreground (etapa posterior) as recarrega ao voltar do background.
     LaunchedEffect(familyId) {
         val fid = familyId ?: return@LaunchedEffect
         while (true) {
             kotlinx.coroutines.delay(30_000)
             try {
                 familyLocations = locationRepository.getFamilyLocations(fid)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // ETAPA 4 — stale/fresh: ao voltar do foreground (MainActivity.onResume),
+    // recarrega as tabelas raras que não são realtime (geofences/places/flags)
+    // e o próprio estado SOS/locations, sem polling contínuo.
+    LaunchedEffect(familyId) {
+        val fid = familyId ?: return@LaunchedEffect
+        HomeDataRefresh.ticks.collect { _ ->
+            try {
+                familyLocations = locationRepository.getFamilyLocations(fid)
+                activeSosAlerts = sosRepository.getActiveSosAlerts(fid)
+                geofences = geofenceRepository.getFamilyGeofences(fid)
+                places = PlacesRepository().getFamilyPlaces(fid)
+                flagByMember = PrivacyRepository().getMemberFlags(fid)
+                    .associateBy { it.user_id }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
