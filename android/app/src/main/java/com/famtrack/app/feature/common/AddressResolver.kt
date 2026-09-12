@@ -4,6 +4,8 @@ import android.content.Context
 import android.location.Address
 import android.location.Geocoder
 import android.util.LruCache
+import com.famtrack.app.feature.places.Place
+import com.famtrack.app.util.isInsideGeofence
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -67,6 +69,45 @@ object AddressResolver {
         }
         if (outcome is AddressOutcome.Found) cache.put(key, outcome.text)
         return outcome
+    }
+
+    /**
+     * Rótulo único e consistente para coordenadas (ETAPA 10A).
+     *
+     * Cadeia de decisão:
+     * 1. GEOFENCE — o PRIMEIRO local da lista cuja coordenada está DENTRO do
+     *    raio real dele (distance <= radius; NUNCA o "mais próximo" fora do
+     *    raio): devolve o nome do local.
+     * 2. ENDEREÇO REVERSO CURTO — "Rua, Nº" (no máx. 2 partes).
+     * 3. BAIRRO/CIDADE — sem rua, "Bairro, Cidade" (ou só um dos dois).
+     * 4. FALLBACK — null (a superfície escolhe o texto seguro: coordenadas no
+     *    Home/detalhe/SOS, "Local aproximado" nos títulos de percurso).
+     *
+     * Reutiliza o cache compartilhado de endereços (resolveShort): a mesma
+     * coordenada nunca roda duas resoluções de Geocoder em duplicidade.
+     */
+    suspend fun resolveForDisplay(
+        context: Context,
+        latitude: Double,
+        longitude: Double,
+        places: List<Place>
+    ): String? {
+        // Prioridade 1: só o local cujo raio REAL contém a coordenada.
+        val place = places.firstOrNull {
+            isInsideGeofence(
+                latitude,
+                longitude,
+                it.center_lat,
+                it.center_lon,
+                it.radius_meters.toDouble()
+            )
+        }
+        if (place != null) return place.name
+        // Prioridades 2 e 3: endereço curto ou bairro/cidade.
+        return when (val outcome = resolveShort(context, latitude, longitude)) {
+            is AddressOutcome.Found -> outcome.text
+            else -> null
+        }
     }
 
     private fun addressText(address: Address): String? {

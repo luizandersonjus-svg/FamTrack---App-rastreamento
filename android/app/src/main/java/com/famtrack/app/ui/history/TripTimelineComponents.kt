@@ -52,10 +52,8 @@ import androidx.compose.ui.unit.dp
 import com.famtrack.app.R
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.RoutePoint
-import com.famtrack.app.feature.common.AddressOutcome
 import com.famtrack.app.feature.common.AddressResolver
 import com.famtrack.app.feature.places.Place
-import com.famtrack.app.util.isInsideGeofence
 import com.famtrack.app.util.parseIsoInstantMillis
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.maps.android.compose.CameraPositionState
@@ -372,7 +370,7 @@ internal fun formatTripTime(millis: Long): String =
 
 /**
  * Rótulo de origem/destino de um trecho: nome do Place salvo (se dentro do
- * raio), senão endereço via Geocoder, senão "Local aproximado".
+ * raio), senão endereço curto/bairro-cidade, senão "Local aproximado".
  */
 internal suspend fun tripLocationLabel(
     context: Context,
@@ -380,21 +378,10 @@ internal suspend fun tripLocationLabel(
     latitude: Double,
     longitude: Double
 ): String {
-    val inside = places.firstOrNull {
-        isInsideGeofence(
-            latitude,
-            longitude,
-            it.center_lat,
-            it.center_lon,
-            it.radius_meters.toDouble()
-        )
-    }
-    if (inside != null) return inside.name
-    // ETAPA 8D — rótulo CURTO (rua+nº ou bairro) para títulos de percurso.
-    return when (val outcome = AddressResolver.resolveShort(context, latitude, longitude)) {
-        is AddressOutcome.Found -> outcome.text
-        else -> context.getString(R.string.history_local_approx)
-    }
+    // ETAPA 10A — rótulo ÚNICO compartilhado (mesma cadeia dos MemberCards,
+    // bottom sheet e SOS). Fallback dos títulos de percurso: "Local aproximado".
+    return AddressResolver.resolveForDisplay(context, latitude, longitude, places)
+        ?: context.getString(R.string.history_local_approx)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,6 @@
 package com.famtrack.app.feature.memberdetail
 
 import android.content.Context
-import android.location.Geocoder
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,11 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.famtrack.app.R
+import com.famtrack.app.feature.common.AddressResolver
 import com.famtrack.app.feature.places.Place
-import com.famtrack.app.util.isInsideGeofence
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.util.Locale
 
 /**
  * Informações exibidas no card de um membro.
@@ -248,8 +244,9 @@ fun MemberInitialsAvatar(
 }
 
 /**
- * Status humano: nome do local se dentro de uma Place ("Em casa" para CASA),
- * senão endereço via Geocoder, senão as coordenadas.
+ * Status humano e consistente (ETAPA 10A): rótulo único compartilhado
+ * (geofence cujo raio CONTÉM o ponto > endereço curto > bairro/cidade);
+ * fallback seguro: as coordenadas.
  */
 suspend fun resolveStatusText(
     context: Context,
@@ -257,37 +254,6 @@ suspend fun resolveStatusText(
     longitude: Double,
     places: List<Place>
 ): String {
-    val inside = places.firstOrNull {
-        isInsideGeofence(
-            latitude,
-            longitude,
-            it.center_lat,
-            it.center_lon,
-            it.radius_meters.toDouble()
-        )
-    }
-    if (inside != null) {
-        return if (inside.type == "CASA") {
-            context.getString(R.string.member_status_casa)
-        } else {
-            inside.name
-        }
-    }
-
-    return withContext(Dispatchers.IO) {
-        try {
-            val geocoder = Geocoder(context, Locale.getDefault())
-            val addresses = geocoder.getFromLocation(latitude, longitude, 1)
-            val address = addresses?.firstOrNull()
-            val parts = listOfNotNull(
-                address?.thoroughfare,
-                address?.subThoroughfare,
-                address?.locality
-            ).take(3).joinToString(", ")
-                .ifBlank { address?.getAddressLine(0) }
-            if (!parts.isNullOrBlank()) parts else "${"%.5f".format(latitude)}, ${"%.5f".format(longitude)}"
-        } catch (e: Exception) {
-            "${"%.5f".format(latitude)}, ${"%.5f".format(longitude)}"
-        }
-    }
+    return AddressResolver.resolveForDisplay(context, latitude, longitude, places)
+        ?: "${"%.5f".format(latitude)}, ${"%.5f".format(longitude)}"
 }
