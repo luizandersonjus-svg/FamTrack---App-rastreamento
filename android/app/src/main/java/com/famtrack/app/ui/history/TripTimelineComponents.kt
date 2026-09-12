@@ -957,6 +957,110 @@ internal fun DayRouteMapCard(
 // Player do percurso em tela cheia (Parte E)
 // ---------------------------------------------------------------------------
 
+// ETAPA 8B — colapso de paradas no player: permanência >= PLAYER_STAY_MIN_MS
+// dentro de PLAYER_STAY_RADIUS_M vira um par chegada/partida no mesmo ponto
+// (o avatar permanece no lugar enquanto o relógio avança, sem animar o ruído).
+private const val PLAYER_STAY_RADIUS_M = 40.0
+private const val PLAYER_STAY_MIN_MS = 2 * 60 * 1000L
+
+// ETAPA 8B — cobertura mínima de map-matching para usar a geometria casada
+// no avatar; abaixo disso o player usa os pontos brutos (comportamento antigo).
+private const val MATCHED_AVATAR_MIN_RATIO = 0.6
+
+/**
+ * ETAPA 8B (item C): colapsa "paradas" para a reprodução. Um bloco de pontos
+ * consecutivos dentro de ~40m por >= 2min vira chegada + partida NO MESMO
+ * ponto: o segmento resultante tem ~0m (sem microdeslocamentos) e o intervalo
+ * de tempo inteiro, fazendo o player segurar o avatar na parada.
+ */
+private fun collapsePlayerStops(points: List<RoutePoint>): List<RoutePoint> {
+    if (points.size < 3) return points
+    val out = ArrayList<RoutePoint>(points.size)
+    var i = 0
+    while (i < points.size) {
+        val base = points[i]
+        var k = i
+        while (k + 1 < points.size) {
+            val d = FloatArray(1)
+            Location.distanceBetween(
+                base.latitude, base.longitude,
+                points[k + 1].latitude, points[k + 1].longitude, d
+            )
+            if (d[0] > PLAYER_STAY_RADIUS_M) break
+            k++
+        }
+        if (k - i >= 2) {
+            val start = parseIsoInstantMillis(base.recorded_at)
+            val end = parseIsoInstantMillis(points[k].recorded_at)
+            if (start != null && end != null && end - start >= PLAYER_STAY_MIN_MS) {
+                out += base
+                out += base.copy(recorded_at = points[k].recorded_at)
+                i = k + 1
+                continue
+            }
+        }
+        out += base
+        i++
+    }
+    return out
+}
+
+/**
+ * ETAPA 8B (item B): geometria do avatar. Com cobertura de map-matching
+ * suficiente, trechos MATCHED tornam-se pontos sobre a via (tempo interpolado
+ * pelos limites do trecho bruto) e trechos PARTIAL preservam o GPS bruto.
+ * Abaixo de [MATCHED_AVATAR_MIN_RATIO], usa os pontos brutos (comportamento
+ * antigo). Nunca conecta os dois lados de um gap (alinhamento por segmento).
+ */
+private fun matchedAvatarPoints(
+    raw: List<RoutePoint>,
+    matched: MatchedRouteResult?
+): List<RoutePoint> {
+    if (matched == null) return raw
+    if (matched.totalPoints == 0) return raw
+    if (matched.matchedPoints.toDouble() / matched.totalPoints < MATCHED_AVATAR_MIN_RATIO) {
+        return raw
+    }
+    val rawSegs = splitSegments(raw)
+    val out = ArrayList<RoutePoint>(raw.size)
+    var ri = 0
+    for (seg in matched.segments) {
+        while (ri < rawSegs.size && rawSegs[ri].size < 2) ri++
+        val rawSeg = rawSegs.getOrNull(ri) ?: continue
+        ri++
+        if (seg.status != RouteMatchStatus.MATCHED || seg.points.size < 2) {
+            out += rawSeg
+            continue
+        }
+        val first = rawSeg.first()
+        val startMillis = parseIsoInstantMillis(first.recorded_at)
+        val endMillis = parseIsoInstantMillis(rawSeg.last().recorded_at)
+        if (startMillis == null || endMillis == null) {
+            out += rawSeg
+            continue
+        }
+        val span = (endMillis - startMillis).coerceAtLeast(0L)
+        val n = seg.points.size
+        for ((j, p) in seg.points.withIndex()) {
+            val frac = if (n > 1) j.toDouble() / (n - 1) else 0.0
+            val t = startMillis + (span * frac).toLong()
+            out += RoutePoint(
+                family_id = first.family_id,
+                user_id = first.user_id,
+                latitude = p.latitude,
+                longitude = p.longitude,
+                recorded_at = java.time.Instant.ofEpochMilli(t).toString(),
+                accuracy = first.accuracy,
+                speed = first.speed,
+                bearing = first.bearing,
+                batteryLevel = first.batteryLevel,
+                provider = first.provider
+            )
+        }
+    }
+    return if (out.size >= 2) out else raw
+}
+
 /**
  * Player único de um percurso. Mapa ocupa a maior parte da tela; painel de
  * controles compacto (máx. ~96dp) na parte inferior. Fecha com o botão/X ou
@@ -974,17 +1078,23 @@ internal fun TripPlayerScreen(
     val playPoints = remember(points) {
         if (points.size > 800) douglasPeucker(points, DISPLAY_EPSILON_METERS) else points
     }
-    val rawPlaySegments = remember(playPoints) { splitSegments(playPoints) }
-    val latLngs = remember(playPoints) { playPoints.map { LatLng(it.latitude, it.longitude) } }
+    // ETAPA 8B — item C: input do player sem microdeslocamentos de paradas.
+    val playerPoints = remember(playPoints) { collapsePlayerStops(playPoints) }
+    val rawPlaySegments = remember(playerPoints) { splitSegments(playerPoints) }
     var matchedResult by remember { mutableStateOf<MatchedRouteResult?>(null) }
-    val playback = rememberRoutePlayback(playPoints, latLngs, memberName, primaryColor)
+    // ETAPA 8B — item B: avatar sobre a via quando o matching é bom.
+    val avatarPoints = remember(playerPoints, matchedResult) {
+        matchedAvatarPoints(playerPoints, matchedResult)
+    }
+    val latLngs = remember(avatarPoints) { avatarPoints.map { LatLng(it.latitude, it.longitude) } }
+    val playback = rememberRoutePlayback(avatarPoints, latLngs, memberName, primaryColor)
     val camera = rememberCameraPositionState()
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(playPoints) {
+    LaunchedEffect(playerPoints) {
         matchedResult = null
-        if (playPoints.size >= 2) {
-            scope.launch { matchedResult = fetchMatchedRoute(playPoints) }
+        if (playerPoints.size >= 2) {
+            scope.launch { matchedResult = fetchMatchedRoute(playerPoints) }
         }
         when {
             latLngs.size >= 2 -> {
