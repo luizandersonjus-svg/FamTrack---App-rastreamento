@@ -49,6 +49,26 @@ object AddressResolver {
         return outcome
     }
 
+    /** Versão curta (rua+nº ou bairro) para títulos de percurso. */
+    suspend fun resolveShort(context: Context, latitude: Double, longitude: Double): AddressOutcome {
+        val key = "s:" + resolutionKey(latitude, longitude)
+        cache.get(key)?.let { return AddressOutcome.Found(it) }
+        val outcome = withContext(Dispatchers.IO) {
+            try {
+                val geocoder = Geocoder(context, Locale.getDefault())
+                val addresses = geocoder.getFromLocation(latitude, longitude, 1)
+                val text = addresses?.firstOrNull()?.let(::shortAddressText)
+                if (text.isNullOrBlank()) AddressOutcome.NotFound else AddressOutcome.Found(text)
+            } catch (e: IOException) {
+                AddressOutcome.Unavailable
+            } catch (e: Exception) {
+                AddressOutcome.Unavailable
+            }
+        }
+        if (outcome is AddressOutcome.Found) cache.put(key, outcome.text)
+        return outcome
+    }
+
     private fun addressText(address: Address): String? {
         val joined = buildString {
             address.subThoroughfare?.let { append(it).append(", ") }
@@ -59,6 +79,25 @@ object AddressResolver {
         }.trimEnd(',', ' ').trim()
         if (joined.isNotBlank()) return joined
         return address.getAddressLine(0)?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Rótulo curto para títulos de percurso: prioriza "Rua, N°" (até 2 partes);
+     * sem rua, "Bairro, Cidade" (ou só o bairro/cidade); nunca devolve a linha
+     * completa do endereço (que deixa o título de percurso ilegível).
+     */
+    private fun shortAddressText(address: Address): String? {
+        val thoroughfare = address.thoroughfare?.takeIf { it.isNotBlank() }
+        val subThoroughfare = address.subThoroughfare?.takeIf { it.isNotBlank() }
+        if (thoroughfare != null) {
+            return if (subThoroughfare != null) "$thoroughfare, $subThoroughfare" else thoroughfare
+        }
+        val sub = address.subLocality?.takeIf { it.isNotBlank() }
+        val locality = address.locality?.takeIf { it.isNotBlank() }
+        if (sub != null) {
+            return if (locality != null && locality != sub) "$sub, $locality" else sub
+        }
+        return locality?.takeIf { it.isNotBlank() }
     }
 
     private fun resolutionKey(latitude: Double, longitude: Double): String {

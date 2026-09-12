@@ -390,7 +390,8 @@ internal suspend fun tripLocationLabel(
         )
     }
     if (inside != null) return inside.name
-    return when (val outcome = AddressResolver.resolve(context, latitude, longitude)) {
+    // ETAPA 8D — rótulo CURTO (rua+nº ou bairro) para títulos de percurso.
+    return when (val outcome = AddressResolver.resolveShort(context, latitude, longitude)) {
         is AddressOutcome.Found -> outcome.text
         else -> context.getString(R.string.history_local_approx)
     }
