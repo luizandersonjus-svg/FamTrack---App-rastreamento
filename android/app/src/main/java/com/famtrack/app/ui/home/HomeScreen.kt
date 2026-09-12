@@ -84,9 +84,8 @@ import com.google.maps.android.compose.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.LocalDateTime
-import java.time.OffsetDateTime
-import java.time.format.DateTimeFormatter
+import com.famtrack.app.util.parseIsoInstantMillis
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 private const val MAX_SOS_ACCURACY_METERS = 250.0
@@ -1349,19 +1348,10 @@ fun HomeScreen(
     }
 }
 
-/** Formata o instante ISO do alerta SOS como HH:mm; null se indisponível. */
+/** Formata o instante ISO do alerta SOS como HH:mm (fuso do aparelho); null se indisponível. */
 private fun formatSosTime(iso: String?): String? {
-    if (iso.isNullOrBlank()) return null
-    val formatter = DateTimeFormatter.ofPattern("HH:mm")
-    return try {
-        OffsetDateTime.parse(iso).format(formatter)
-    } catch (_: Exception) {
-        try {
-            LocalDateTime.parse(iso).format(formatter)
-        } catch (_: Exception) {
-            null
-        }
-    }
+    val millis = parseIsoInstantMillis(iso) ?: return null
+    return java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(millis))
 }
 
 private fun startSharingService(

@@ -25,6 +25,7 @@ import com.famtrack.app.data.remote.HealthConnectRepository
 import com.famtrack.app.feature.healthsnap.HealthSnapRepository
 import com.famtrack.app.feature.places.Place
 import com.famtrack.app.feature.privacy.MemberFlags
+import com.famtrack.app.util.parseIsoInstantMillis
 
 /**
  * Bottom sheet de detalhe de um membro: status, bateria, saude, ligar,
@@ -106,18 +107,7 @@ fun MemberDetailBottomSheet(
     }
 
     val phone = member.user?.phone
-    val lastUpdatedMillis = member.lastUpdatedAt ?: run {
-        member.created_at?.let { ts ->
-            try {
-                java.text.SimpleDateFormat(
-                    "yyyy-MM-dd'T'HH:mm:ss",
-                    java.util.Locale.getDefault()
-                ).parse(ts.substringBefore('.'))?.time
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
+    val lastUpdatedMillis = member.lastUpdatedAt ?: parseIsoInstantMillis(member.created_at)
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(

@@ -56,6 +56,7 @@ import com.famtrack.app.feature.common.AddressOutcome
 import com.famtrack.app.feature.common.AddressResolver
 import com.famtrack.app.feature.places.Place
 import com.famtrack.app.util.isInsideGeofence
+import com.famtrack.app.util.parseIsoInstantMillis
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.maps.android.compose.CameraPositionState
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
@@ -83,7 +84,6 @@ import kotlinx.coroutines.runBlocking
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 
 // ---------------------------------------------------------------------------
 // Constantes e cálculo dos percursos (Parte D)
@@ -305,23 +305,8 @@ private fun flushTrip(
 // Helpers compartilhados com HistoryScreen
 // ---------------------------------------------------------------------------
 
-/** Converte um timestamp do banco (ISO) em millis. Tolerante ao sufixo de fuso. */
-internal fun parseTimestampMillis(timestamp: String?): Long? {
-    if (timestamp == null) return null
-    return try {
-        val cleaned = timestamp.trim().substringBefore('.')
-        val inputFormat = if (cleaned.endsWith("Z")) {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.getDefault()).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
-        } else {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-        }
-        inputFormat.parse(cleaned)?.time
-    } catch (e: Exception) {
-        null
-    }
-}
+/** Converte um timestamp do banco (ISO) em millis UTC-aware (fuso correto). */
+internal fun parseTimestampMillis(timestamp: String?): Long? = parseIsoInstantMillis(timestamp)
 
 /**
  * Centro e zoom para enquadrar a rota via LatLngBounds (com margem).

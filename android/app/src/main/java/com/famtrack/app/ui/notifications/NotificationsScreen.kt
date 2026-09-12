@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import com.famtrack.app.data.model.Notification
 import com.famtrack.app.data.remote.NotificationRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.util.parseIsoInstantMillis
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -220,13 +221,7 @@ fun NotificationItem(
 }
 
 private fun formatTimestamp(timestamp: String?): String {
-    if (timestamp == null) return ""
-    return try {
-        val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-        val outputFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-        val date = inputFormat.parse(timestamp)
-        outputFormat.format(date!!)
-    } catch (e: Exception) {
-        timestamp
-    }
+    val millis = parseIsoInstantMillis(timestamp) ?: return timestamp.orEmpty()
+    val outputFormat = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+    return outputFormat.format(Date(millis))
 }

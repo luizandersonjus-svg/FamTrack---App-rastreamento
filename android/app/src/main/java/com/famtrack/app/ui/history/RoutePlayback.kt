@@ -52,9 +52,9 @@ import com.google.maps.android.compose.CameraPositionState
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
+import com.famtrack.app.util.parseIsoInstantMillis
 import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.TimeZone
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -136,7 +136,7 @@ internal class RoutePlaybackController internal constructor(
 
     /** Horário interpolado entre os pontos do segmento atual (null se sem recorded_at). */
     fun timeMillisFor(p: Float): Long? {
-        if (!hasRoute) return points.firstOrNull()?.let { parseRouteIsoMillis(it.recorded_at) }
+        if (!hasRoute) return points.firstOrNull()?.let { parseIsoInstantMillis(it.recorded_at) }
         val i = segmentIndexFor(p)
         val seg = segments[i]
         val before = if (i == 0) 0f else cumulativeMeters[i - 1].toFloat()
@@ -635,29 +635,11 @@ private fun buildSegments(points: List<RoutePoint>): List<RouteSegment> {
             start = a,
             end = b,
             distanceMeters = d[0].coerceAtLeast(0f),
-            startMillis = parseRouteIsoMillis(a.recorded_at) ?: 0L,
-            endMillis = parseRouteIsoMillis(b.recorded_at) ?: 0L
+            startMillis = parseIsoInstantMillis(a.recorded_at) ?: 0L,
+            endMillis = parseIsoInstantMillis(b.recorded_at) ?: 0L
         )
     }
     return out
-}
-
-/** Tolerante a sufixo de fuso (mesma lógica do histórico). */
-private fun parseRouteIsoMillis(timestamp: String?): Long? {
-    if (timestamp == null) return null
-    return try {
-        val cleaned = timestamp.trim().substringBefore('.')
-        val fmt = if (cleaned.endsWith("Z")) {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.getDefault()).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
-        } else {
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-        }
-        fmt.parse(cleaned)?.time
-    } catch (e: Exception) {
-        null
-    }
 }
 
 /** Formata o horário interpolado como HH:mm (fuso do aparelho). */
