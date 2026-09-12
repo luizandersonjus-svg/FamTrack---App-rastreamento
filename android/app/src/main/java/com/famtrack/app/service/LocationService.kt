@@ -74,6 +74,11 @@ class LocationService : Service() {
     // Cache local de geofences (evita fetch a cada atualização)
     private var cachedGeofences: List<Geofence> = emptyList()
 
+    // ETAPA 8C — confirmação na borda: streak de fixes consecutivos discordando
+    // do estado confirmado antes de emitir transição (evita falso positivo por
+    // ruído GPS). In-memory (resetado ao reiniciar o serviço).
+    private val boundaryStreak = mutableMapOf<String, Int>()
+
     // Última localização conhecida (usada pelo sensor de passos)
     private var lastKnownLocation: Location? = null
 
@@ -843,21 +848,26 @@ result.lastLocation?.let { location ->
                     val isInside = distance[0] <= geofence.radius_meters
                     val wasInside = isUserInsideGeofence(userId, geofenceId)
 
-                    if (!wasInside && isInside) {
-                        transitions += 1
-                        val title = geofence.name
-                        val message = "Chegou em: ${geofence.name}"
-                        sendGeofenceNotification(title, message, geofenceId.hashCode())
-                        insertGeofenceNotification(familyId, userId, title, message)
-                    } else if (wasInside && !isInside) {
-                        transitions += 1
-                        val title = geofence.name
-                        val message = "Saiu de: ${geofence.name}"
-                        sendGeofenceNotification(title, message, geofenceId.hashCode() + 1)
-                        insertGeofenceNotification(familyId, userId, title, message)
+                    // ETAPA 8C — só transiciona após GEOFENCE_CONFIRM_FIXES fixes
+                    // consecutivos discordando do estado confirmado (dwell curto).
+                    val key = "${userId}_$geofenceId"
+                    val streak = if (isInside == wasInside) {
+                        boundaryStreak.remove(key)
+                        0
+                    } else {
+                        val next = (boundaryStreak[key] ?: 0) + 1
+                        boundaryStreak[key] = next
+                        next
                     }
-
-                    updateGeofenceState(userId, geofenceId, isInside)
+                    if (streak >= GEOFENCE_CONFIRM_FIXES) {
+                        boundaryStreak.remove(key)
+                        transitions += 1
+                        val title = geofence.name
+                        val message = if (isInside) "Chegou em: ${geofence.name}" else "Saiu de: ${geofence.name}"
+                        sendGeofenceNotification(title, message, geofenceId.hashCode() + if (isInside) 0 else 1)
+                        insertGeofenceNotification(familyId, userId, title, message)
+                        updateGeofenceState(userId, geofenceId, isInside)
+                    }
                 }
 
                 // ETAPA 7 — observabilidade: transições de geofence avaliadas.
@@ -1011,6 +1021,10 @@ result.lastLocation?.let { location ->
         private const val UPDATE_INTERVAL_MS = 3000L
         private const val MIN_DISTANCE_METERS = 5f
         private const val GEOFENCE_CACHE_REFRESH_MS = 60000L
+
+        // ETAPA 8C — dwell do próprio usuário: número de fixes consecutivos
+        // discordando do estado confirmado antes de emitir a transição.
+        private const val GEOFENCE_CONFIRM_FIXES = 2
 
         // ETAPA 3 — bateria: cadência adaptativa do GPS (parado x em movimento)
         // Velocidade > este valor (m/s) já conta como movimento imediato.

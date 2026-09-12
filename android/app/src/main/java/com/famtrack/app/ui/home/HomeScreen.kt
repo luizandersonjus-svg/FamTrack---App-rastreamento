@@ -159,12 +159,14 @@ fun HomeScreen(
         onboardingPending = !OnboardingPrefs.isDone(context)
     }
 
-    // Agenda (de forma unica e permanente) a checagem periodica de geofences
-    // assim que o usuario tem familia, mantendo o intervalo de 15 min da F6.
+    // Agenda (de forma unica e permanente) a checagem periodica de geofences.
+    // ETAPA 8C: cadencia 5 min (era 15) e politica UPDATE para substituir o
+    // agendamento antigo; o worker avalia apenas os demais membros (o proprio
+    // usuario usa a avaliacao por fix do LocationService).
     LaunchedEffect(familyId) {
         if (familyId != null) {
             val workRequest = PeriodicWorkRequestBuilder<GeofenceWorker>(
-                15, TimeUnit.MINUTES
+                5, TimeUnit.MINUTES
             ).setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -172,7 +174,7 @@ fun HomeScreen(
             ).build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 "geofence_check",
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 workRequest
             )
         }
