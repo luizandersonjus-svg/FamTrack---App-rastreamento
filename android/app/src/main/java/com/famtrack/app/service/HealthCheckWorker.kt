@@ -20,7 +20,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Healthcheck da cadeia LBS (ETAPA 7).
  *
- * A cada [HEALTH_CHECK_INTERVAL_MIN] (10 min):
+ * A cada [HEALTH_CHECK_INTERVAL_MIN] (15 min — ETAPA 9A: este é o intervalo
+ * mínimo real do WorkManager para trabalhos periódicos; antes se declarava 10
+ * min, que o WorkManager arredondava para 15):
  * 1) WATCHDOG: se o batimento do [LocationService] (último fix de GPS) parou
  *    por mais de [RESTART_AFTER_MS], religa o serviço de forma idempotente e
  *    avisa o dono por notificação (somente quando há intenção de compartilhar:
@@ -94,7 +96,7 @@ class HealthCheckWorker(
         private const val TAG = "FamTrackTelemetry"
         private const val HEALTH_CHECK_WORK_NAME = "health_check"
         private const val RESTART_AFTER_MS = 8 * 60_000L
-        private const val HEALTH_CHECK_INTERVAL_MIN = 10L
+        private const val HEALTH_CHECK_INTERVAL_MIN = 15L
         private const val RESTART_NOTIFICATION_ID = 9001
 
         fun schedule(context: Context) {
