@@ -4,6 +4,8 @@ import android.content.Context
 import android.location.Address
 import android.location.Geocoder
 import android.util.LruCache
+import com.famtrack.app.data.offline.AddressCacheEntity
+import com.famtrack.app.data.offline.RouteTrackDatabase
 import com.famtrack.app.feature.places.Place
 import com.famtrack.app.util.isInsideGeofence
 import kotlinx.coroutines.Dispatchers
@@ -29,47 +31,86 @@ sealed interface AddressOutcome {
  */
 object AddressResolver {
 
-    private val cache = LruCache<String, String>(512)
+    private val memCache = LruCache<String, String>(512)
 
-    suspend fun resolve(context: Context, latitude: Double, longitude: Double): AddressOutcome {
-        val key = resolutionKey(latitude, longitude)
-        cache.get(key)?.let { return AddressOutcome.Found(it) }
+    /** Recency do cache Room só é regravado depois deste intervalo (evita
+     * escrita em todo hit). */
+    private const val RECENCY_BUMP_MIN_MS = 5 * 60_000L
 
-        val outcome = withContext(Dispatchers.IO) {
-            try {
-                val geocoder = Geocoder(context, Locale.getDefault())
-                val addresses = geocoder.getFromLocation(latitude, longitude, 1)
-                val text = addresses?.firstOrNull()?.let(::addressText)
-                if (text.isNullOrBlank()) AddressOutcome.NotFound else AddressOutcome.Found(text)
-            } catch (e: IOException) {
-                AddressOutcome.Unavailable
-            } catch (e: Exception) {
-                AddressOutcome.Unavailable
-            }
-        }
-        if (outcome is AddressOutcome.Found) cache.put(key, outcome.text)
-        return outcome
-    }
+    suspend fun resolve(context: Context, latitude: Double, longitude: Double): AddressOutcome =
+        resolveFor(context, latitude, longitude, short = false)
 
     /** Versão curta (rua+nº ou bairro) para títulos de percurso. */
-    suspend fun resolveShort(context: Context, latitude: Double, longitude: Double): AddressOutcome {
-        val key = "s:" + resolutionKey(latitude, longitude)
-        cache.get(key)?.let { return AddressOutcome.Found(it) }
-        val outcome = withContext(Dispatchers.IO) {
+    suspend fun resolveShort(context: Context, latitude: Double, longitude: Double): AddressOutcome =
+        resolveFor(context, latitude, longitude, short = true)
+
+    /**
+     * Resolução com cache em 2 camadas (ETAPA 11A):
+     * 1. Memória (LruCache, por chave "lat,lng" ou "s:lat,lng").
+     * 2. Room (address_cache) — hit é promovido à memória.
+     * 3. Geocoder em IO: um único lookup gera AMBOS os textos (completo e curto)
+     *    do mesmo [Address] e persiste a linha mergida; só resultados positivos
+     *    são cacheados (transitório IOException/ausência nunca envenena o cache).
+     */
+    private suspend fun resolveFor(
+        context: Context,
+        latitude: Double,
+        longitude: Double,
+        short: Boolean
+    ): AddressOutcome {
+        val keyBase = resolutionKey(latitude, longitude)
+        val memKey = if (short) "s:$keyBase" else keyBase
+
+        memCache.get(memKey)?.let { return AddressOutcome.Found(it) }
+
+        val dao = RouteTrackDatabase.getInstance(context).addressCacheDao()
+        val row = dao.find(keyBase)
+        if (row != null) {
+            val text = if (short) row.shortText else row.fullText
+            if (text != null) {
+                memCache.put(memKey, text)
+                if (now() - row.lastUsedAt > RECENCY_BUMP_MIN_MS) {
+                    dao.upsert(row.copy(lastUsedAt = now()))
+                }
+                return AddressOutcome.Found(text)
+            }
+        }
+
+        return withContext(Dispatchers.IO) {
             try {
                 val geocoder = Geocoder(context, Locale.getDefault())
                 val addresses = geocoder.getFromLocation(latitude, longitude, 1)
-                val text = addresses?.firstOrNull()?.let(::shortAddressText)
-                if (text.isNullOrBlank()) AddressOutcome.NotFound else AddressOutcome.Found(text)
+                val address = addresses?.firstOrNull()
+                val full = address?.let(::addressText)?.takeIf { it.isNotBlank() }
+                val shortened = address?.let(::shortAddressText)?.takeIf { it.isNotBlank() }
+                if (full == null && shortened == null) {
+                    AddressOutcome.NotFound
+                } else {
+                    val merged = AddressCacheEntity(
+                        cacheKey = keyBase,
+                        fullText = full ?: row?.fullText,
+                        shortText = shortened ?: row?.shortText,
+                        lastUsedAt = now()
+                    )
+                    dao.upsert(merged)
+                    if (row == null) dao.trimTo(RouteTrackDatabase.addressCacheMaxRows())
+                    val text = if (short) shortened else full
+                    if (text != null) {
+                        memCache.put(memKey, text)
+                        AddressOutcome.Found(text)
+                    } else {
+                        AddressOutcome.NotFound
+                    }
+                }
             } catch (e: IOException) {
                 AddressOutcome.Unavailable
             } catch (e: Exception) {
                 AddressOutcome.Unavailable
             }
         }
-        if (outcome is AddressOutcome.Found) cache.put(key, outcome.text)
-        return outcome
     }
+
+    private fun now(): Long = System.currentTimeMillis()
 
     /**
      * Rótulo único e consistente para coordenadas (ETAPA 10A).
