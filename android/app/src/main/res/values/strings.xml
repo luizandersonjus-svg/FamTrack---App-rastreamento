@@ -287,6 +287,9 @@
     <string name="home_sos_resolve">Resolver</string>
     <string name="home_sos_end">Encerrar alerta</string>
     <string name="sos_resolve_fail">N\u00e3o foi poss\u00edvel resolver o alerta. Tente novamente.</string>
+    <!-- ETAPA 9B — falhas informativas e badge de localização aproximada -->
+    <string name="sos_already_active">Seu SOS j\u00e1 est\u00e1 ativo</string>
+    <string name="sos_approx_badge">Localiza\u00e7\u00e3o aproximada</string>
     <string name="sos_notif_fallback">Um membro da fam\u00edlia</string>
 
     <!-- Hist\u00f3rico de rotas (Fase 1) -->

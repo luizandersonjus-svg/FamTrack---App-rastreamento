@@ -47,6 +47,7 @@ import androidx.work.WorkManager
 import com.famtrack.app.R
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.Location as FamLocation
+import com.famtrack.app.data.model.SosAlert
 import com.famtrack.app.data.remote.FamilyMemberDisplay
 import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.GeofenceRepository
@@ -529,7 +530,30 @@ fun HomeScreen(
                         )
                     } catch (e: Exception) {
                         e.printStackTrace()
-                        sosMessage = context.getString(R.string.sos_send_fail)
+                        // ETAPA 9B — falha informativa em vez de genérico: se o
+                        // envio bateu no dedup (SOS do membro já ativo), reabre a
+                        // janela de cancelamento com o alerta existente; caso
+                        // contrário, repassa a mensagem do servidor (ex.: rate
+                        // limit da família) quando houver.
+                        val active = try {
+                            sosRepository.getActiveSosAlerts(fId).firstOrNull { it.user_id == uId }
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (active != null) {
+                            pendingSosId = active.id
+                            showSosCancelWindow = true
+                            sosMessage = context.getString(R.string.sos_already_active)
+                        } else {
+                            val serverMsg = e.localizedMessage
+                                ?.substringBefore('\n')
+                                ?.take(120)
+                                ?.trim()
+                            sosMessage = if (!serverMsg.isNullOrBlank())
+                                serverMsg
+                            else
+                                context.getString(R.string.sos_send_fail)
+                        }
                     }
                 } finally {
                     sosInFlight = false
@@ -1054,6 +1078,16 @@ fun HomeScreen(
                                     color = Color.White
                                 )
                             }
+                            // ETAPA 9B — badge de localização aproximada para TODOS
+                            // os membros (precisão >250m ou fix com >5min).
+                            if (isSosApprox(alert)) {
+                                Text(
+                                    text = context.getString(R.string.sos_approx_badge),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                            }
                             if (alert.message.isNotBlank()) {
                                 Text(
                                     text = alert.message,
@@ -1354,6 +1388,16 @@ fun HomeScreen(
 private fun formatSosTime(iso: String?): String? {
     val millis = parseIsoInstantMillis(iso) ?: return null
     return java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(millis))
+}
+
+// ETAPA 9B — mesmo critério do envio: precisão >250 m ou fix com mais de 5 min
+// significa localização aproximada; o card SOS ativo informa todos os membros.
+private fun isSosApprox(alert: SosAlert): Boolean {
+    val acc = alert.accuracy
+    if (acc == null || acc > MAX_SOS_ACCURACY_METERS) return true
+    val fixMillis = parseIsoInstantMillis(alert.fixAt)
+    if (fixMillis == null || System.currentTimeMillis() - fixMillis > MAX_SOS_FIX_AGE_MILLIS) return true
+    return false
 }
 
 private fun startSharingService(
