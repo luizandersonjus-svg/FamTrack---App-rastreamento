@@ -2,6 +2,7 @@ package com.famtrack.app.ui.notifications
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -19,6 +20,8 @@ import com.famtrack.app.util.parseIsoInstantMillis
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,18 +34,43 @@ fun NotificationsScreen(
 
     var notifications by remember { mutableStateOf<List<Notification>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var currentUserId by remember { mutableStateOf<String?>(null) }
+
+    var typeFilter by remember { mutableStateOf("todas") }
+    var timeFilter by remember { mutableStateOf("tudo") }
+    var showClearDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         try {
             val client = SupabaseClient.getInstance()
             val user = client.auth.currentUserOrNull()
             if (user != null) {
+                currentUserId = user.id
                 notifications = notificationRepository.getUserNotifications(user.id)
             }
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
             isLoading = false
+        }
+    }
+
+    // ETAPA 8E — indicador de não-lidas + filtros por tipo/data (client-side).
+    val unreadCount = notifications.count { !it.read }
+
+    val filtered = remember(notifications, typeFilter, timeFilter) {
+        val zone = ZoneId.systemDefault()
+        val todayStart = LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
+        val weekStart = todayStart - (7L * 24L * 60L * 60L * 1000L)
+        notifications.filter { n ->
+            val typeOk = typeFilter == "todas" || n.type == typeFilter
+            val millis = parseIsoInstantMillis(n.created_at) ?: Long.MAX_VALUE
+            val timeOk = when (timeFilter) {
+                "hoje" -> millis >= todayStart
+                "7dias" -> millis >= weekStart
+                else -> true
+            }
+            typeOk && timeOk
         }
     }
 
@@ -83,6 +111,13 @@ fun NotificationsScreen(
                                 Icons.Default.DoneAll,
                                 contentDescription = "Marcar todas como lidas",
                                 tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        IconButton(onClick = { showClearDialog = true }) {
+                            Icon(
+                                Icons.Default.DeleteSweep,
+                                contentDescription = "Limpar todas",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -128,37 +163,159 @@ fun NotificationsScreen(
                 }
             }
             else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(paddingValues),
-                    contentPadding = PaddingValues(16.dp)
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(paddingValues)
                 ) {
-                    items(notifications) { notification ->
-                        NotificationItem(
-                            notification = notification,
-                            onMarkAsRead = {
-                                scope.launch {
-                                    try {
-                                        notificationRepository.markAsRead(notification.id!!)
-                                        notifications = notifications.map {
-                                            if (it.id == notification.id) it.copy(read = true) else it
-                                        }
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
-                                }
-                            }
+                    // ETAPA 8E — filtros por tipo e data.
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = typeFilter == "todas",
+                                onClick = { typeFilter = "todas" },
+                                label = { Text("Todas") }
+                            )
+                        }
+                        item {
+                            FilterChip(
+                                selected = typeFilter == "sos",
+                                onClick = { typeFilter = "sos" },
+                                label = { Text("SOS") }
+                            )
+                        }
+                        item {
+                            FilterChip(
+                                selected = typeFilter == "geofence",
+                                onClick = { typeFilter = "geofence" },
+                                label = { Text("Geofence") }
+                            )
+                        }
+                    }
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = timeFilter == "tudo",
+                                onClick = { timeFilter = "tudo" },
+                                label = { Text("Tudo") }
+                            )
+                        }
+                        item {
+                            FilterChip(
+                                selected = timeFilter == "hoje",
+                                onClick = { timeFilter = "hoje" },
+                                label = { Text("Hoje") }
+                            )
+                        }
+                        item {
+                            FilterChip(
+                                selected = timeFilter == "7dias",
+                                onClick = { timeFilter = "7dias" },
+                                label = { Text("7 dias") }
+                            )
+                        }
+                    }
+                    // Indicador de não-lidas.
+                    if (unreadCount > 0) {
+                        Text(
+                            text = if (unreadCount == 1) "1 nao lida" else "$unreadCount nao lidas",
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
                         )
+                    }
+                    if (filtered.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Nada com os filtros atuais",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp)
+                        ) {
+                            items(filtered, key = { it.id ?: it.hashCode() }) { notification ->
+                                NotificationItem(
+                                    notification = notification,
+                                    onMarkAsRead = {
+                                        scope.launch {
+                                            try {
+                                                notificationRepository.markAsRead(notification.id!!)
+                                                notifications = notifications.map {
+                                                    if (it.id == notification.id) it.copy(read = true) else it
+                                                }
+                                            } catch (e: Exception) {
+                                                e.printStackTrace()
+                                            }
+                                        }
+                                    },
+                                    onDelete = {
+                                        scope.launch {
+                                            try {
+                                                notificationRepository.deleteNotification(notification.id!!)
+                                                notifications = notifications.filter { it.id != notification.id }
+                                            } catch (e: Exception) {
+                                                e.printStackTrace()
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    // ETAPA 8E — confirmação antes de limpar tudo.
+    if (showClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDialog = false },
+            title = { Text("Limpar todas") },
+            text = { Text("Excluir todas as notificações?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearDialog = false
+                    val uid = currentUserId
+                    if (uid != null) {
+                        scope.launch {
+                            try {
+                                notificationRepository.clearAll(uid)
+                                notifications = emptyList()
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    }
+                }) {
+                    Text("Excluir")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
     }
 }
 
 @Composable
 fun NotificationItem(
     notification: Notification,
-    onMarkAsRead: () -> Unit
+    onMarkAsRead: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -215,6 +372,13 @@ fun NotificationItem(
                         contentDescription = "Marcar como lida"
                     )
                 }
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Excluir",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

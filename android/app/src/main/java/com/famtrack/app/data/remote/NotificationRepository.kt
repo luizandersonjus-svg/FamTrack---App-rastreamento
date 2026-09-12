@@ -66,4 +66,22 @@ class NotificationRepository {
                 }
             }
     }
+
+    // ETAPA 8E — exige a policy "notifications_delete"
+    // (sql/09_notifications_delete.sql): exclui apenas a própria linha.
+    suspend fun deleteNotification(notificationId: String) {
+        client.from("notifications").delete {
+            filter {
+                eq("id", notificationId)
+            }
+        }
+    }
+
+    suspend fun clearAll(userId: String) {
+        client.from("notifications").delete {
+            filter {
+                eq("user_id", userId)
+            }
+        }
+    }
 }

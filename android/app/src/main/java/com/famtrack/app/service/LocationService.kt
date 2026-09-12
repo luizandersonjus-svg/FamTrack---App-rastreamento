@@ -274,7 +274,7 @@ class LocationService : Service() {
 
     @Suppress("DEPRECATION")
     private fun startFg() {
-        val notification = createNotification()
+        val notification = createNotification(currentPlaceName, currentPlaceSteps)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -358,6 +358,7 @@ result.lastLocation?.let { location ->
                             sendLocationToSupabase(location)
                             saveRoutePoint(location)
                             checkGeofences(location)
+                            refreshTrackingNotification()
                         }
                     }
                 } catch (e: Exception) {
@@ -972,7 +973,7 @@ result.lastLocation?.let { location ->
         stepCountInitialized = false
     }
 
-    private fun createNotification(): Notification {
+    private fun createNotification(place: String?, steps: Int): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
@@ -980,14 +981,45 @@ result.lastLocation?.let { location ->
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // ETAPA 8E — notificação dinâmica: mostra o local atual e passos quando
+        // conhecidos; fora de um local, volta ao texto genérico.
+        val text = if (place != null) {
+            getString(R.string.location_service_notification_in_place, place, steps)
+        } else {
+            getString(R.string.location_service_notification_text)
+        }
+
         return NotificationCompat.Builder(this, FamTrackApp.NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.location_service_notification_title))
-            .setContentText(getString(R.string.location_service_notification_text))
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(pendingIntent)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setOngoing(true)
             .build()
+    }
+
+    // ETAPA 8E — re-emite a mesma notificação com conteúdo atualizado
+    // (local + passos), limitado a 1x/30s para não drenar bateria.
+    @Suppress("DEPRECATION")
+    private fun refreshTrackingNotification() {
+        val now = System.currentTimeMillis()
+        if (now - lastNotificationRefresh < NOTIFICATION_REFRESH_MIN_MS) return
+        lastNotificationRefresh = now
+        try {
+            val notification = createNotification(currentPlaceName, currentPlaceSteps)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Falha ao atualizar notificacao de rastreamento: ${e.localizedMessage}")
+        }
     }
 
     override fun onDestroy() {
@@ -1021,6 +1053,12 @@ result.lastLocation?.let { location ->
         private const val UPDATE_INTERVAL_MS = 3000L
         private const val MIN_DISTANCE_METERS = 5f
         private const val GEOFENCE_CACHE_REFRESH_MS = 60000L
+
+        // ETAPA 8E — atualiza a notificação persistente no máximo 1x a cada 30s.
+        private const val NOTIFICATION_REFRESH_MIN_MS = 30_000L
+
+        @Volatile
+        private var lastNotificationRefresh = 0L
 
         // ETAPA 8C — dwell do próprio usuário: número de fixes consecutivos
         // discordando do estado confirmado antes de emitir a transição.

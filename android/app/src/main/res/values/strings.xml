@@ -48,7 +48,14 @@
     <string name="mark_all_read">Marcar todas como lidas</string>
     <string name="location_permission_required">Permissão de localização necessária</string>
     <string name="background_location_required">Permissão de localização em segundo plano necessária</string>
+    <!-- ETAPA 8E — notificações: filtros e limpeza -->
+    <string name="notifications_clear_all">Limpar todas</string>
+    <string name="notifications_clear_confirm">Excluir todas as notificações?</string>
+    <string name="notifications_empty_filtered">Nada com os filtros atuais</string>
     <string name="notification_permission_required">Permissão de notificação necessária</string>
+
+    <!-- ETAPA 8E — notificação persistente dinâmica -->
+    <string name="location_service_notification_in_place">FamTrack está em %1$s · %2$d passos</string>
     <string name="family_name">Nome da Família</string>
     <string name="create_family">Criar Família</string>
     <string name="join_family">Entrar em Família</string>
