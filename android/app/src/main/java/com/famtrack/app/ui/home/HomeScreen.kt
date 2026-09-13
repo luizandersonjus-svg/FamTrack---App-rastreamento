@@ -97,6 +97,7 @@ private const val MAX_SOS_ACCURACY_METERS = 250.0
 private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
+private const val LAYER_EVENTS_LIMIT = 20L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,6 +163,7 @@ fun HomeScreen(
         mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.WEATHER))
     }
     var showLegend by remember { mutableStateOf(false) }
+    var familyEvents by remember { mutableStateOf<List<Event>>(emptyList()) }
     var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
@@ -436,7 +438,32 @@ fun HomeScreen(
                 } catch (e: Exception) {
                     // Mantem o ultimo contador em falhas de rede.
                 }
+                if (layerEvents) {
+                    val fid = familyId
+                    if (fid != null) {
+                        try {
+                            familyEvents = ActivityRepository()
+                                .getFamilyEvents(fid, limit = LAYER_EVENTS_LIMIT)
+                        } catch (e: Exception) {
+                            // Mantem o ultimo conjunto em falhas de rede.
+                        }
+                    }
+                }
                 delay(NOTIF_BADGE_REFRESH_MS)
+            }
+        }
+    }
+
+    // ETAPA 10D-2: ao ligar a camada de Eventos, carrega na hora (o loop acima
+    // mantem fresco enquanto o Home estiver visivel).
+    LaunchedEffect(layerEvents, familyId) {
+        val fid = familyId
+        if (layerEvents && fid != null) {
+            try {
+                familyEvents = ActivityRepository()
+                    .getFamilyEvents(fid, limit = LAYER_EVENTS_LIMIT)
+            } catch (e: Exception) {
+                // Mantem o ultimo conjunto em falhas de rede.
             }
         }
     }
@@ -896,6 +923,46 @@ fun HomeScreen(
                             .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_RED),
                         zIndex = 10f
                     )
+                }
+                if (layerEvents) {
+                    familyEvents.forEach { event ->
+                        if (event.lat == 0.0 && event.lng == 0.0) return@forEach
+                        val memberName = memberInfos[event.member_id]?.display_name ?: "Membro"
+                        Marker(
+                            state = MarkerState(
+                                position = com.google.android.gms.maps.model.LatLng(
+                                    event.lat,
+                                    event.lng
+                                )
+                            ),
+                            title = "$memberName \u2014 ${eventShortLabel(event.type, context)}",
+                            icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
+                                .defaultMarker(eventHue(event.type)),
+                            zIndex = 0.5f
+                        )
+                    }
+                    familyLocations.forEach { loc ->
+                        val lastUpdateMillis = loc.lastUpdatedAt
+                            ?: parseIsoInstantMillis(loc.created_at)
+                        val stale = lastUpdateMillis != null &&
+                            System.currentTimeMillis() - lastUpdateMillis > STALE_SIGNAL_MS
+                        if (stale) {
+                            val memberName = memberInfos[loc.user_id]?.display_name ?: "Membro"
+                            Marker(
+                                state = MarkerState(
+                                    position = com.google.android.gms.maps.model.LatLng(
+                                        loc.latitude,
+                                        loc.longitude
+                                    )
+                                ),
+                                title = "$memberName \u2014 " +
+                                    context.getString(R.string.map_event_stale),
+                                icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
+                                    .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_VIOLET),
+                                zIndex = 0.6f
+                            )
+                        }
+                    }
                 }
                 if (layerGeofences) {
                     geofences.forEach { geofence ->
@@ -1485,6 +1552,25 @@ fun HomeScreen(
 private fun formatSosTime(iso: String?): String? {
     val millis = parseIsoInstantMillis(iso) ?: return null
     return java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(millis))
+}
+
+// ETAPA 10D-2 — cores e rótulos curtos dos eventos na camada de Eventos.
+private fun eventHue(type: String): Float = when (type) {
+    "SOS" -> com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_RED
+    "ENTER" -> com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_GREEN
+    "EXIT" -> com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_ORANGE
+    "CHECKIN" -> com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_AZURE
+    "LOW_BATTERY" -> com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_YELLOW
+    else -> com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_VIOLET
+}
+
+private fun eventShortLabel(type: String, context: Context): String = when (type) {
+    "SOS" -> context.getString(R.string.map_event_sos)
+    "ENTER" -> context.getString(R.string.map_event_enter)
+    "EXIT" -> context.getString(R.string.map_event_exit)
+    "CHECKIN" -> context.getString(R.string.map_event_checkin)
+    "LOW_BATTERY" -> context.getString(R.string.map_event_low_battery)
+    else -> type
 }
 
 // ETAPA 9B — mesmo critério do envio: precisão >250 m ou fix com mais de 5 min

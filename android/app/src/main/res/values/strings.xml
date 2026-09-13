@@ -431,4 +431,10 @@
     <string name="map_legend_geofence">Geofence</string>
     <string name="map_legend_event">Evento relevante</string>
     <string name="map_legend_stale">Dado antigo</string>
+    <string name="map_event_sos">SOS</string>
+    <string name="map_event_enter">Entrada</string>
+    <string name="map_event_exit">Sa\u00edda</string>
+    <string name="map_event_checkin">Check-in</string>
+    <string name="map_event_low_battery">Bateria fraca</string>
+    <string name="map_event_stale">Dado antigo</string>
 </resources>
