@@ -37,13 +37,19 @@ class NotificationRepository {
         )
     }
 
-    suspend fun getUserNotifications(userId: String): List<Notification> {
+    suspend fun getUserNotifications(
+        userId: String,
+        maxRows: Long? = null
+    ): List<Notification> {
         return client.from("notifications")
             .select {
                 filter {
                     eq("user_id", userId)
                 }
                 order("created_at", Order.DESCENDING)
+                if (maxRows != null) {
+                    limit(maxRows)
+                }
             }
             .decodeList<Notification>()
     }
