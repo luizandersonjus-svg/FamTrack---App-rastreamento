@@ -415,10 +415,19 @@ private suspend fun resolveEventLocation(
         )
     }
 
-    val messagePlace = direct?.name ?: exact?.name ?: near?.name
+    // ETAPA 11-C3: check-in usa o RÓTULO ÚNICO (10A) — só o lugar cujo raio
+    // real contém a coordenada (nunca "mais próxima" nem o heurístico "perto").
+    val isCheckin = event.type == "CHECKIN"
+    val messagePlace = if (isCheckin) {
+        direct?.name ?: exact?.name
+    } else {
+        direct?.name ?: exact?.name ?: near?.name
+    }
 
     var subtitle: String? = null
-    if (messagePlace == null) {
+    if (isCheckin && messagePlace == null) {
+        subtitle = AddressResolver.resolveForDisplay(context, event.lat, event.lng, places)
+    } else if (messagePlace == null) {
         subtitle = when (val outcome = AddressResolver.resolve(context, event.lat, event.lng)) {
             is AddressOutcome.Found -> outcome.text
             AddressOutcome.NotFound -> context.getString(R.string.address_not_found)
