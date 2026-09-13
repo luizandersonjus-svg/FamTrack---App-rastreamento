@@ -45,6 +45,8 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.famtrack.app.R
+import com.famtrack.app.data.local.MapLayer
+import com.famtrack.app.data.local.MapLayerPrefs
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.Location as FamLocation
 import com.famtrack.app.data.model.SosAlert
@@ -147,6 +149,19 @@ fun HomeScreen(
     var sosMessage by remember { mutableStateOf<String?>(null) }
     var places by remember { mutableStateOf<List<Place>>(emptyList()) }
     var unreadNotifications by remember { mutableStateOf(0) }
+    var layerGeofences by remember {
+        mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.GEOFENCES))
+    }
+    var layerEvents by remember {
+        mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.EVENTS))
+    }
+    var layerRoutes by remember {
+        mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.ROUTES))
+    }
+    var layerWeather by remember {
+        mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.WEATHER))
+    }
+    var showLegend by remember { mutableStateOf(false) }
     var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
@@ -882,11 +897,12 @@ fun HomeScreen(
                         zIndex = 10f
                     )
                 }
-                geofences.forEach { geofence ->
-                    val center = com.google.android.gms.maps.model.LatLng(
-                        geofence.center_lat,
-                        geofence.center_lon
-                    )
+                if (layerGeofences) {
+                    geofences.forEach { geofence ->
+                        val center = com.google.android.gms.maps.model.LatLng(
+                            geofence.center_lat,
+                            geofence.center_lon
+                        )
                     val strokeColor = try {
                         Color(android.graphics.Color.parseColor(geofence.color))
                     } catch (e: Exception) {
@@ -904,8 +920,45 @@ fun HomeScreen(
                         state = MarkerState(position = center),
                         title = geofence.name
                     )
+                    }
+                    PlacesMapOverlay(places)
                 }
-                PlacesMapOverlay(places)
+            }
+
+            MapLayerPanel(
+                geofencesOn = layerGeofences,
+                eventsOn = layerEvents,
+                routesOn = layerRoutes,
+                weatherOn = layerWeather,
+                onGeofencesChange = { on ->
+                    layerGeofences = on
+                    MapLayerPrefs.setOn(context, MapLayer.GEOFENCES, on)
+                },
+                onEventsChange = { on ->
+                    layerEvents = on
+                    MapLayerPrefs.setOn(context, MapLayer.EVENTS, on)
+                },
+                onRoutesChange = { on ->
+                    layerRoutes = on
+                    MapLayerPrefs.setOn(context, MapLayer.ROUTES, on)
+                },
+                onWeatherChange = { on ->
+                    layerWeather = on
+                    MapLayerPrefs.setOn(context, MapLayer.WEATHER, on)
+                },
+                onShowLegend = { showLegend = !showLegend },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 64.dp, end = 16.dp)
+            )
+
+            if (showLegend) {
+                MapLegend(
+                    onDismiss = { showLegend = false },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 16.dp, bottom = 96.dp)
+                )
             }
 
             when {

@@ -417,4 +417,18 @@
     <string name="routes_err_no_map_app">Nenhum aplicativo de mapas encontrado neste aparelho.</string>
     <string name="routes_opening_google_maps">Abrindo no Google Maps</string>
     <string name="routes_opening_browser">Abrindo no navegador</string>
+    <string name="map_layers_panel">Camadas do mapa</string>
+    <string name="map_layers_title">Camadas</string>
+    <string name="map_layer_family">Familiares</string>
+    <string name="map_layer_geofences">Geofences</string>
+    <string name="map_layer_events">Eventos</string>
+    <string name="map_layer_routes">Trajetos</string>
+    <string name="map_layer_weather">Clima</string>
+    <string name="map_legend_toggle">Legenda</string>
+    <string name="map_legend_title">Legenda</string>
+    <string name="map_legend_current">Localiza\u00e7\u00e3o atual</string>
+    <string name="map_legend_route">Trajeto</string>
+    <string name="map_legend_geofence">Geofence</string>
+    <string name="map_legend_event">Evento relevante</string>
+    <string name="map_legend_stale">Dado antigo</string>
 </resources>
