@@ -218,6 +218,7 @@
     <string name="checkin_done">Check-in feito! </string>
     <string name="checkin_fail">Não foi possível fazer o check-in</string>
     <string name="checkin_no_perm">Sem permissão de localização para o check-in</string>
+    <string name="checkin_paused">Compartilhamento pausado — o check-in não envia a localização</string>
     <string name="checkin_no_location">Sem localização disponível neste momento</string>
     <string name="checkin_timeout">O check-in excedeu o tempo de localização (15 s)</string>
     <string name="checkin_btn">Fazer check-in</string>

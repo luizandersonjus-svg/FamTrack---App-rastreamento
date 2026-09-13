@@ -1305,12 +1305,15 @@ fun HomeScreen(
                                         scope.launch {
                                             checkoutBusy = true
                                             try {
-                                                val outcome = CheckInRepository().checkIn(context)
+                                                val outcome = CheckInRepository()
+                                                    .checkIn(context, places)
                                                 sosMessage = when (outcome) {
                                                     CheckInOutcome.SUCCESS ->
                                                         context.getString(R.string.checkin_done)
                                                     CheckInOutcome.NO_PERMISSION ->
                                                         context.getString(R.string.checkin_no_perm)
+                                                    CheckInOutcome.PAUSED ->
+                                                        context.getString(R.string.checkin_paused)
                                                     CheckInOutcome.NO_LOCATION ->
                                                         context.getString(R.string.checkin_no_location)
                                                     CheckInOutcome.TIMEOUT ->

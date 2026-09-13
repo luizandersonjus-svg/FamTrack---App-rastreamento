@@ -8,6 +8,9 @@ import com.famtrack.app.data.remote.NotificationRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.feature.activity.ActivityRepository
 import com.famtrack.app.feature.activity.Event
+import com.famtrack.app.feature.places.Place
+import com.famtrack.app.feature.privacy.PrivacyPrefs
+import com.famtrack.app.util.isInsideGeofence
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.tasks.Task
@@ -31,6 +34,8 @@ enum class CheckInOutcome {
     SUCCESS,
     /** Sem permissão de localização. */
     NO_PERMISSION,
+    /** Compartilhamento pausado: o check-in não captura nem envia localização. */
+    PAUSED,
     /** Localização indisponível no momento. */
     NO_LOCATION,
     /** Estourou o tempo máximo de espera pela localização. */
@@ -40,11 +45,25 @@ enum class CheckInOutcome {
 }
 
 /**
- * Registra o check-in do usuário na localização atual (F5).
+ * Registra o check-in do usuário na localização atual (11-C1).
+ *
+ * Privacidade (ETAPA 11): o respect a `sharing_paused` acontece ANTES de
+ * qualquer captura de localização — pausado nunca captura nem envia
+ * coordenadas/fix. `places` vêm da tela (já carregadas): o nome/geofence só é
+ * atribuído se a coordenada estiver DENTRO do raio real (nunca "mais próxima").
+ * A resolução não inicia rastreamento contínuo: são fix únicos via
+ * FusedLocationProviderClient.
  */
 class CheckInRepository {
 
-    suspend fun checkIn(context: Context): CheckInOutcome {
+    suspend fun checkIn(
+        context: Context,
+        places: List<Place> = emptyList()
+    ): CheckInOutcome {
+        if (PrivacyPrefs.isSharingPaused(context)) {
+            return CheckInOutcome.PAUSED
+        }
+
         val user = SupabaseClient.getInstance().auth.currentUserOrNull()
             ?: return CheckInOutcome.ERROR
 
@@ -68,11 +87,20 @@ class CheckInRepository {
                 val member = com.famtrack.app.data.remote.FamilyRepository()
                     .getUserFamily(user.id) ?: return@withContext CheckInOutcome.ERROR
 
+                val placeId = places.firstOrNull {
+                    isInsideGeofence(
+                        last.first, last.second,
+                        it.center_lat, it.center_lon,
+                        it.radius_meters.toDouble()
+                    )
+                }?.id
+
                 ActivityRepository().recordEvent(
                     Event(
                         family_id = member.family_id,
                         member_id = user.id,
                         type = "CHECKIN",
+                        place_id = placeId,
                         lat = last.first,
                         lng = last.second
                     )
