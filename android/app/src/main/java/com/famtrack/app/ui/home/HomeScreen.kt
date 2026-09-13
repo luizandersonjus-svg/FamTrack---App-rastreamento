@@ -90,6 +90,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.famtrack.app.util.parseIsoInstantMillis
+import com.famtrack.app.util.isInsideGeofence
+import com.famtrack.app.data.model.RoutePoint
+import com.famtrack.app.ui.history.MatchedSegment
+import com.famtrack.app.ui.history.RouteMatchStatus
+import com.famtrack.app.ui.history.fetchMatchedRoute
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -164,6 +169,13 @@ fun HomeScreen(
     }
     var showLegend by remember { mutableStateOf(false) }
     var familyEvents by remember { mutableStateOf<List<Event>>(emptyList()) }
+    var selectedRouteMemberId by remember { mutableStateOf<String?>(null) }
+    var routePeriod by remember { mutableStateOf(RoutePeriod.TODAY) }
+    var routeSegments by remember { mutableStateOf<List<MatchedSegment>>(emptyList()) }
+    var routeStops by remember { mutableStateOf<List<RoutePoint>>(emptyList()) }
+    var routeLoading by remember { mutableStateOf(false) }
+    var routeError by remember { mutableStateOf(false) }
+    var routeLoaded by remember { mutableStateOf(false) }
     var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
@@ -465,6 +477,53 @@ fun HomeScreen(
             } catch (e: Exception) {
                 // Mantem o ultimo conjunto em falhas de rede.
             }
+        }
+    }
+
+    // ETAPA 10D-3: ao ligar a camada de Trajetos, escolhe o primeiro membro com
+    // compartilhamento ativo (e nunca membros pausados). Ao desligar, limpa.
+    LaunchedEffect(layerRoutes, familyLocations, flagByMember) {
+        if (layerRoutes && selectedRouteMemberId == null) {
+            val first = familyLocations.firstOrNull {
+                flagByMember[it.user_id]?.sharing_paused != true
+            }
+            selectedRouteMemberId = first?.user_id
+        }
+        if (!layerRoutes) {
+            routeSegments = emptyList()
+            routeStops = emptyList()
+            routeLoaded = false
+            routeError = false
+        }
+    }
+
+    // Carrega o trajeto do membro/período via /route_history + OSRM (por
+    // segmento), apenas quando a regra match>=2 permite. Membros pausados nunca
+    // consultam; o "no-recordar" e garantido pelo gate acima e pela regra SQL.
+    LaunchedEffect(layerRoutes, familyId, selectedRouteMemberId, routePeriod, flagByMember) {
+        val fid = familyId
+        val mid = selectedRouteMemberId
+        if (!layerRoutes || fid == null || mid == null) return@LaunchedEffect
+        if (flagByMember[mid]?.sharing_paused == true) return@LaunchedEffect
+        routeLoading = true
+        routeError = false
+        try {
+            val (startUtc, endUtc) = routePeriodBounds(
+                routePeriod, java.time.ZoneId.systemDefault()
+            )
+            val dayPoints = withContext(Dispatchers.IO) {
+                locationRepository.getRouteHistoryForDay(fid, mid, startUtc, endUtc)
+            }
+            routeStops = buildStopMarkers(dayPoints)
+            val matched = withContext(Dispatchers.IO) {
+                if (dayPoints.size >= 2) fetchMatchedRoute(dayPoints) else null
+            }
+            routeSegments = matched?.segments.orEmpty()
+            routeLoaded = true
+        } catch (e: Exception) {
+            routeError = true
+        } finally {
+            routeLoading = false
         }
     }
 
@@ -990,6 +1049,49 @@ fun HomeScreen(
                     }
                     PlacesMapOverlay(places)
                 }
+                if (layerRoutes && routeSegments.isNotEmpty()) {
+                    routeSegments.forEach { seg ->
+                        val dashed = seg.status != RouteMatchStatus.MATCHED
+                        Polyline(
+                            points = seg.points,
+                            color = if (dashed) {
+                                MaterialTheme.colorScheme.outline
+                            } else {
+                                MaterialTheme.colorScheme.tertiary
+                            },
+                            width = 6f,
+                            zIndex = 1f,
+                            pattern = if (dashed) {
+                                listOf(
+                                    com.google.android.gms.maps.model.Dash(15f),
+                                    com.google.android.gms.maps.model.Gap(10f)
+                                )
+                            } else {
+                                emptyList()
+                            }
+                        )
+                    }
+                    routeStops.forEach { stop ->
+                        val stopName = geofences.firstOrNull { g ->
+                            isInsideGeofence(
+                                stop.latitude, stop.longitude,
+                                g.center_lat, g.center_lon, g.radius_meters
+                            )
+                        }?.name ?: context.getString(R.string.route_layer_stop)
+                        Marker(
+                            state = MarkerState(
+                                position = com.google.android.gms.maps.model.LatLng(
+                                    stop.latitude,
+                                    stop.longitude
+                                )
+                            ),
+                            title = stopName,
+                            icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
+                                .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_CYAN),
+                            zIndex = 0.45f
+                        )
+                    }
+                }
             }
 
             MapLayerPanel(
@@ -1018,6 +1120,36 @@ fun HomeScreen(
                     .align(Alignment.TopEnd)
                     .padding(top = 64.dp, end = 16.dp)
             )
+
+            if (layerRoutes) {
+                val routeMembers = familyLocations
+                    .distinctBy { it.user_id }
+                    .filter { flagByMember[it.user_id]?.sharing_paused != true }
+                    .map {
+                        MemberRouteOption(
+                            userId = it.user_id,
+                            displayName = memberInfos[it.user_id]?.display_name ?: "Membro"
+                        )
+                    }
+                RouteLayerSelector(
+                    members = routeMembers,
+                    selectedMemberId = selectedRouteMemberId,
+                    period = routePeriod,
+                    loading = routeLoading,
+                    hasRoute = routeLoaded &&
+                        (routeSegments.isNotEmpty() || routeStops.isNotEmpty()),
+                    error = routeError,
+                    onMemberChange = { selectedRouteMemberId = it },
+                    onPeriodChange = { routePeriod = it },
+                    onDismiss = {
+                        layerRoutes = false
+                        MapLayerPrefs.setOn(context, MapLayer.ROUTES, false)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(top = 84.dp, start = 16.dp)
+                )
+            }
 
             if (showLegend) {
                 MapLegend(
