@@ -176,6 +176,8 @@ fun HomeScreen(
     var routeLoading by remember { mutableStateOf(false) }
     var routeError by remember { mutableStateOf(false) }
     var routeLoaded by remember { mutableStateOf(false) }
+    var weatherByMember by remember { mutableStateOf<Map<String, WeatherCondition>>(emptyMap()) }
+    var weatherLoading by remember { mutableStateOf(false) }
     var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
@@ -437,6 +439,37 @@ fun HomeScreen(
         }
     }
 
+    // ETAPA 10D-4B: condições por membro (Open-Meteo). Consulta só os membros
+    // com compartilhamento ativo; membros pausados nunca têm ponto enviado.
+    val refreshWeather: suspend () -> Unit = {
+        val active = familyLocations
+            .distinctBy { it.user_id }
+            .filter { flagByMember[it.user_id]?.sharing_paused != true }
+        weatherLoading = active.isNotEmpty()
+        try {
+            val fetched = withContext(Dispatchers.IO) {
+                active.mapNotNull { loc ->
+                    try {
+                        fetchWeatherAt(loc.latitude, loc.longitude)
+                            ?.let { loc.user_id to it }
+                    } catch (e: Exception) {
+                        null
+                    }
+                }.toMap()
+            }
+            weatherByMember = fetched
+        } catch (e: Exception) {
+            // Mantem o ultimo conjunto em falhas de rede.
+        } finally {
+            weatherLoading = false
+        }
+    }
+
+    // Ao ligar a camada de Clima, consulta na hora (o loop abaixo mantém fresco).
+    LaunchedEffect(layerWeather, familyId) {
+        if (layerWeather) refreshWeather()
+    }
+
     // Badge de nao-lidas da tab Notificacoes (ETAPA 12B): atualiza quando o
     // Home fica visivel e periodicamente enquanto estiver; volta da lista de
     // notificacoes recompose o Home e ja reencontra o contador.
@@ -461,6 +494,7 @@ fun HomeScreen(
                         }
                     }
                 }
+                if (layerWeather) refreshWeather()
                 delay(NOTIF_BADGE_REFRESH_MS)
             }
         }
@@ -1148,6 +1182,32 @@ fun HomeScreen(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(top = 84.dp, start = 16.dp)
+                )
+            }
+
+            if (layerWeather) {
+                val weatherRows = familyLocations
+                    .distinctBy { it.user_id }
+                    .map { loc ->
+                        WeatherRow(
+                            userId = loc.user_id,
+                            displayName = memberInfos[loc.user_id]?.display_name ?: "Membro",
+                            paused = flagByMember[loc.user_id]?.sharing_paused == true,
+                            text = describeWeather(
+                                weatherByMember[loc.user_id], context
+                            )
+                        )
+                    }
+                WeatherLayerCard(
+                    rows = weatherRows,
+                    loading = weatherLoading,
+                    onDismiss = {
+                        layerWeather = false
+                        MapLayerPrefs.setOn(context, MapLayer.WEATHER, false)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 96.dp)
                 )
             }
 

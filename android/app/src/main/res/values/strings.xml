@@ -445,4 +445,19 @@
     <string name="route_layer_error">N\u00e3o foi poss\u00edvel carregar o trajeto</string>
     <string name="route_layer_paused_empty">Nenhum membro com compartilhamento ativo</string>
     <string name="route_layer_stop">Perman\u00eancia</string>
+    <string name="weather_card_title">Clima da fam\u00edlia</string>
+    <string name="weather_loading">Carregando clima\u2026</string>
+    <string name="weather_paused">compartilhamento pausado</string>
+    <string name="weather_no_data">sem dados</string>
+    <string name="weather_clear">C\u00e9u limpo</string>
+    <string name="weather_partly">Parcialmente nublado</string>
+    <string name="weather_cloudy">Nublado</string>
+    <string name="weather_fog">Nevoeiro</string>
+    <string name="weather_drizzle">Chuvisco</string>
+    <string name="weather_rain">Chuva</string>
+    <string name="weather_snow">Neve</string>
+    <string name="weather_showers">Aguaceiro</string>
+    <string name="weather_thunder">Tempestade</string>
+    <string name="weather_na">Sem classifica\u00e7\u00e3o</string>
+    <string name="weather_source">Condi\u00e7\u00f5es: Open-Meteo</string>
 </resources>
