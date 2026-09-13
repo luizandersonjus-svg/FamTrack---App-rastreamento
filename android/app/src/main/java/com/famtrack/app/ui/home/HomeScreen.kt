@@ -52,6 +52,7 @@ import com.famtrack.app.data.remote.FamilyMemberDisplay
 import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
+import com.famtrack.app.data.remote.NotificationRepository
 import com.famtrack.app.data.remote.SosRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.feature.activity.ActivityRepository
@@ -83,6 +84,7 @@ import com.google.android.gms.location.*
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.famtrack.app.util.parseIsoInstantMillis
@@ -92,6 +94,7 @@ import java.util.concurrent.TimeUnit
 private const val MAX_SOS_ACCURACY_METERS = 250.0
 private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
+private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -143,6 +146,7 @@ fun HomeScreen(
     var sosCancelling by remember { mutableStateOf(false) }
     var sosMessage by remember { mutableStateOf<String?>(null) }
     var places by remember { mutableStateOf<List<Place>>(emptyList()) }
+    var unreadNotifications by remember { mutableStateOf(0) }
     var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
@@ -401,6 +405,24 @@ fun HomeScreen(
         while (true) {
             nowTick = System.currentTimeMillis()
             kotlinx.coroutines.delay(30_000L)
+        }
+    }
+
+    // Badge de nao-lidas da tab Notificacoes (ETAPA 12B): atualiza quando o
+    // Home fica visivel e periodicamente enquanto estiver; volta da lista de
+    // notificacoes recompose o Home e ja reencontra o contador.
+    LaunchedEffect(selectedTab, userId) {
+        if (selectedTab == 0 && userId != null) {
+            while (true) {
+                try {
+                    unreadNotifications = NotificationRepository()
+                        .getUserNotifications(userId!!, maxRows = 50)
+                        .count { !it.read }
+                } catch (e: Exception) {
+                    // Mantem o ultimo contador em falhas de rede.
+                }
+                delay(NOTIF_BADGE_REFRESH_MS)
+            }
         }
     }
 
@@ -706,15 +728,34 @@ fun HomeScreen(
                 tabs.forEachIndexed { index, title ->
                     NavigationBarItem(
                         icon = {
-                            Icon(
-                                when (index) {
-                                    0 -> Icons.Filled.Map
-                                    1 -> Icons.Outlined.History
-                                    2 -> Icons.Outlined.Notifications
-                                    else -> Icons.Outlined.Settings
-                                },
-                                contentDescription = title
-                            )
+                            when (index) {
+                                0 -> Icon(
+                                    Icons.Filled.Map,
+                                    contentDescription = title
+                                )
+                                1 -> Icon(
+                                    Icons.Outlined.History,
+                                    contentDescription = title
+                                )
+                                2 -> BadgedBox(
+                                    badge = {
+                                        if (unreadNotifications > 0) {
+                                            Badge {
+                                                Text(unreadNotifications.coerceAtMost(99).toString())
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Notifications,
+                                        contentDescription = title
+                                    )
+                                }
+                                else -> Icon(
+                                    Icons.Outlined.Settings,
+                                    contentDescription = title
+                                )
+                            }
                         },
                         label = { Text(title, fontSize = 12.sp) },
                         selected = selectedTab == index,
