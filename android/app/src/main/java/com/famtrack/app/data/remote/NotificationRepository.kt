@@ -83,6 +83,17 @@ class NotificationRepository {
         }
     }
 
+    // ETAPA L1 — limpa apenas as LEIDAS do próprio usuário (mesma policy
+    // "notifications_delete": delete em linhas user_id = auth.uid()).
+    suspend fun deleteReadNotifications(userId: String) {
+        client.from("notifications").delete {
+            filter {
+                eq("user_id", userId)
+                eq("read", true)
+            }
+        }
+    }
+
     suspend fun clearAll(userId: String) {
         client.from("notifications").delete {
             filter {
