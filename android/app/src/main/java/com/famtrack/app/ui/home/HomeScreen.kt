@@ -1402,49 +1402,6 @@ label = {
                 }
             }
 
-            Card(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 10.dp)
-                    .border(
-                        width = 1.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(40.dp)
-                    ),
-                shape = RoundedCornerShape(40.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = buildString {
-                            append(familyName ?: "Família")
-                            append(" • ")
-                            append(familyLocations.size)
-                            append(if (familyLocations.size == 1) " membro" else " membros")
-                            val steps = currentSteps
-                            if (steps != null && steps.first != null) {
-                                append(" • ${steps.first}: ${steps.second} passos")
-                            }
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        Icons.Filled.ArrowDropDown,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-
             if (activeSosAlerts.isNotEmpty()) {
                 Card(
                     modifier = Modifier
@@ -1636,6 +1593,16 @@ label = {
                                         text = stringResource(R.string.home_panel_placeholder),
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                val placeSteps = currentSteps
+                                if (placeSteps != null && placeSteps.first != null) {
+                                    Text(
+                                        text = "${placeSteps.first}: ${placeSteps.second} passos",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
