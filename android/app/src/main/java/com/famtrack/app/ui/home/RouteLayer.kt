@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -15,13 +16,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Navigation
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,11 +103,13 @@ fun buildStopMarkers(
 }
 
 /**
- * Seletor compacto da camada Trajeto: membro (apenas com compartilhamento
- * ativo) + período (Hoje / últimas 24 h) + status/atribuição.
+ * Painel "Trajeto recente" (TRAJ-1): ModalBottomSheet compacto, no mesmo padrão
+ * do painel "Camadas do mapa", com altura reduzida para manter o mapa visível e
+ * mostrar a rota desenhada. Não muda nenhuma regra de consulta.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RouteLayerSelector(
+fun RouteLayerPanel(
     members: List<MemberRouteOption>,
     selectedMemberId: String?,
     period: RoutePeriod,
@@ -114,21 +118,21 @@ fun RouteLayerSelector(
     error: Boolean,
     onMemberChange: (String) -> Unit,
     onPeriodChange: (RoutePeriod) -> Unit,
-    onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    onDismiss: () -> Unit
 ) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .fillMaxHeight(0.38f)
+                .padding(start = 20.dp, top = 4.dp, end = 20.dp, bottom = 24.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -137,28 +141,31 @@ fun RouteLayerSelector(
                 Icon(
                     Icons.Filled.Navigation,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.size(8.dp))
                 Text(
                     text = stringResource(R.string.route_layer_title),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(Icons.Filled.Close, contentDescription = null)
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.route_layer_close),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+
             if (members.isEmpty()) {
                 Text(
                     text = stringResource(R.string.route_layer_paused_empty),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
@@ -174,40 +181,41 @@ fun RouteLayerSelector(
                         )
                     }
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(
+                        selected = period == RoutePeriod.TODAY,
+                        onClick = { onPeriodChange(RoutePeriod.TODAY) },
+                        label = { Text(stringResource(R.string.route_layer_today), fontSize = 12.sp) }
+                    )
+                    FilterChip(
+                        selected = period == RoutePeriod.LAST_24H,
+                        onClick = { onPeriodChange(RoutePeriod.LAST_24H) },
+                        label = { Text(stringResource(R.string.route_layer_24h), fontSize = 12.sp) }
+                    )
+                }
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FilterChip(
-                    selected = period == RoutePeriod.TODAY,
-                    onClick = { onPeriodChange(RoutePeriod.TODAY) },
-                    label = { Text(stringResource(R.string.route_layer_today), fontSize = 12.sp) }
-                )
-                FilterChip(
-                    selected = period == RoutePeriod.LAST_24H,
-                    onClick = { onPeriodChange(RoutePeriod.LAST_24H) },
-                    label = { Text(stringResource(R.string.route_layer_24h), fontSize = 12.sp) }
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
+
+            Spacer(modifier = Modifier.height(12.dp))
             when {
                 loading -> {
                     Text(
                         text = stringResource(R.string.route_layer_loading),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 error -> {
                     Text(
                         text = stringResource(R.string.route_layer_error),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error
                     )
                 }
                 !hasRoute && selectedMemberId != null -> {
                     Text(
                         text = stringResource(R.string.route_layer_empty),
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

@@ -446,6 +446,7 @@
     <string name="map_event_low_battery">Bateria fraca</string>
     <string name="map_event_stale">Dado antigo</string>
     <string name="route_layer_title">Trajeto recente</string>
+    <string name="route_layer_close">Fechar painel de trajeto</string>
     <string name="route_layer_today">Hoje</string>
     <string name="route_layer_24h">\u00daltimas 24 h</string>
     <string name="route_layer_loading">Carregando trajeto\u2026</string>

@@ -1235,7 +1235,10 @@ label = {
                 )
             }
 
-            if (layerRoutes) {
+            // Painel "Trajeto recente" como ModalBottomSheet compacto (TRAJ-1):
+            // oculto enquanto o sheet de Camadas está aberto para nunca haver
+            // dois modais simultâneos.
+            if (layerRoutes && !layersSheetOpen) {
                 val routeMembers = familyLocations
                     .distinctBy { it.user_id }
                     .filter { flagByMember[it.user_id]?.sharing_paused != true }
@@ -1245,7 +1248,7 @@ label = {
                             displayName = memberInfos[it.user_id]?.display_name ?: "Membro"
                         )
                     }
-                RouteLayerSelector(
+                RouteLayerPanel(
                     members = routeMembers,
                     selectedMemberId = selectedRouteMemberId,
                     period = routePeriod,
@@ -1258,10 +1261,7 @@ label = {
                     onDismiss = {
                         layerRoutes = false
                         MapLayerPrefs.setOn(context, MapLayer.ROUTES, false)
-                    },
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(top = 84.dp, start = 16.dp)
+                    }
                 )
             }
 
@@ -1630,8 +1630,9 @@ label = {
             // Coluna de controles do mapa: utilitárias (Minha localização e Check-in)
             // agrupadas num bloco; SOS separado, dominante e em cor de
             // emergência. Sobe quando o painel de membros está expandido,
-            // para nunca ficar sobreposto a ele.
-            if (!layersSheetOpen) {
+            // para nunca ficar sobreposto a ele. Oculta com o sheet de Camadas
+            // OU com o painel de Trajeto aberto (TRAJ-1).
+            if (!layersSheetOpen && !layerRoutes) {
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
