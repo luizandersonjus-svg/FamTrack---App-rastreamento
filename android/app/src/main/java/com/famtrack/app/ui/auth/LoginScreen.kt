@@ -169,7 +169,7 @@ fun LoginScreen(
             )
 
             Text(
-                text = "Acompanhe sua familia em tempo real",
+                text = "Acompanhe sua família em tempo real",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
