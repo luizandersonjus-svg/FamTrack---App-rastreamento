@@ -896,7 +896,15 @@ fun HomeScreen(
                                 )
                             }
                         },
-                        label = { Text(title, fontSize = 12.sp) },
+                        label = {
+                            Text(
+                                title,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         selected = selectedTab == index,
                         onClick = {
                             selectedTab = index
@@ -1160,8 +1168,8 @@ fun HomeScreen(
                 },
                 onShowLegend = { showLegend = !showLegend },
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 64.dp, end = 16.dp)
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 16.dp, end = 16.dp, bottom = 152.dp)
             )
 
             if (layerRoutes) {
