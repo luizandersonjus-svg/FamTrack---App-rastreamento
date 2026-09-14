@@ -190,6 +190,7 @@ fun HomeScreen(
     var showLogoutDialog by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var membersPanelExpanded by remember { mutableStateOf(false) }
+    var layersSheetOpen by remember { mutableStateOf(false) }
     var skipNextCameraFollow by remember { mutableStateOf(false) }
     // ETAPA 7 — observabilidade: relógio para reavaliar o "sinal cortado" dos
     // membros (um membro sem atualizações não gera eventos de Realtime).
@@ -1145,48 +1146,71 @@ label = {
                 }
             }
 
-            MapLayerPanel(
-                baseType = mapBaseType,
-                onBaseTypeChange = { type ->
-                    mapBaseType = type
-                    MapLayerPrefs.setBaseType(context, type)
-                },
-                geofencesOn = layerGeofences,
-                eventsOn = layerEvents,
-                routesOn = layerRoutes,
-                weatherOn = layerWeather,
-                onGeofencesChange = { on ->
-                    layerGeofences = on
-                    MapLayerPrefs.setOn(context, MapLayer.GEOFENCES, on)
-                },
-                onEventsChange = { on ->
-                    layerEvents = on
-                    MapLayerPrefs.setOn(context, MapLayer.EVENTS, on)
-                },
-                onRoutesChange = { on ->
-                    layerRoutes = on
-                    MapLayerPrefs.setOn(context, MapLayer.ROUTES, on)
-                },
-                onWeatherChange = { on ->
-                    layerWeather = on
-                    MapLayerPrefs.setOn(context, MapLayer.WEATHER, on)
-                },
-                onShowLegend = { showLegend = !showLegend },
-                members = familyLocations
-                    .distinctBy { it.user_id }
-                    .sortedBy { it.user_id != userId }
-                    .map { loc ->
-                        val info = memberInfos[loc.user_id]
-                        LayerMember(
-                            id = loc.user_id,
-                            avatarUrl = info?.avatar_url,
-                            name = info?.display_name ?: "Membro"
+            if (!layersSheetOpen) {
+                Surface(
+                    onClick = { layersSheetOpen = true },
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                    shadowElevation = 4.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(start = 16.dp, end = 16.dp, bottom = 152.dp)
+                ) {
+                    IconButton(
+                        onClick = { layersSheetOpen = true },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Layers,
+                            contentDescription = stringResource(R.string.map_layers_panel),
+                            tint = MaterialTheme.colorScheme.primary
                         )
+                    }
+                }
+            }
+
+            if (layersSheetOpen) {
+                MapLayerPanel(
+                    baseType = mapBaseType,
+                    onBaseTypeChange = { type ->
+                        mapBaseType = type
+                        MapLayerPrefs.setBaseType(context, type)
                     },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(start = 16.dp, end = 16.dp, bottom = 152.dp)
-            )
+                    geofencesOn = layerGeofences,
+                    eventsOn = layerEvents,
+                    routesOn = layerRoutes,
+                    weatherOn = layerWeather,
+                    onGeofencesChange = { on ->
+                        layerGeofences = on
+                        MapLayerPrefs.setOn(context, MapLayer.GEOFENCES, on)
+                    },
+                    onEventsChange = { on ->
+                        layerEvents = on
+                        MapLayerPrefs.setOn(context, MapLayer.EVENTS, on)
+                    },
+                    onRoutesChange = { on ->
+                        layerRoutes = on
+                        MapLayerPrefs.setOn(context, MapLayer.ROUTES, on)
+                    },
+                    onWeatherChange = { on ->
+                        layerWeather = on
+                        MapLayerPrefs.setOn(context, MapLayer.WEATHER, on)
+                    },
+                    onShowLegend = { showLegend = !showLegend },
+                    onDismiss = { layersSheetOpen = false },
+                    members = familyLocations
+                        .distinctBy { it.user_id }
+                        .sortedBy { it.user_id != userId }
+                        .map { loc ->
+                            val info = memberInfos[loc.user_id]
+                            LayerMember(
+                                id = loc.user_id,
+                                avatarUrl = info?.avatar_url,
+                                name = info?.display_name ?: "Membro"
+                            )
+                        }
+                )
+            }
 
             if (layerRoutes) {
                 val routeMembers = familyLocations
@@ -1532,7 +1556,7 @@ label = {
             // Painel inferior de membros (F2/F3/F7): barra compacta recolhida por padrão;
             // ao tocar, expande o LazyRow com os MemberCards. O usuário atual
             // aparece primeiro, com o selo "Você" no card.
-            if (familyLocations.isNotEmpty()) {
+            if (!layersSheetOpen && familyLocations.isNotEmpty()) {
                 val carouselOrder = remember(familyLocations, userId) {
                     familyLocations.sortedBy { it.user_id != userId }
                 }
@@ -1643,16 +1667,17 @@ label = {
             // agrupadas num bloco; SOS separado, dominante e em cor de
             // emergência. Sobe quando o painel de membros está expandido,
             // para nunca ficar sobreposto a ele.
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(
-                        end = 16.dp,
-                        bottom = if (membersPanelExpanded) 236.dp else 88.dp
-                    ),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+            if (!layersSheetOpen) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(
+                            end = 16.dp,
+                            bottom = if (membersPanelExpanded) 236.dp else 88.dp
+                        ),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.secondary,
@@ -1736,6 +1761,7 @@ label = {
                         .size(56.dp)
                         .shadow(8.dp, RoundedCornerShape(18.dp))
                 )
+                }
             }
 
             sosMessage?.let { msg ->
