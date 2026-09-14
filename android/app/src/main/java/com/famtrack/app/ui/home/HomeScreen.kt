@@ -1146,29 +1146,6 @@ label = {
                 }
             }
 
-            if (!layersSheetOpen) {
-                Surface(
-                    onClick = { layersSheetOpen = true },
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-                    shadowElevation = 4.dp,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(start = 16.dp, end = 16.dp, bottom = 152.dp)
-                ) {
-                    IconButton(
-                        onClick = { layersSheetOpen = true },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Layers,
-                            contentDescription = stringResource(R.string.map_layers_panel),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
-
             if (layersSheetOpen) {
                 MapLayerPanel(
                     baseType = mapBaseType,
@@ -1678,6 +1655,24 @@ label = {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.size(56.dp)
+                ) {
+                    IconButton(
+                        onClick = { layersSheetOpen = true },
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Layers,
+                            contentDescription = stringResource(R.string.map_layers_panel),
+                            modifier = Modifier.size(26.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.secondary,
