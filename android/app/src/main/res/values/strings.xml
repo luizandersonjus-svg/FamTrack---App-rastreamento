@@ -418,7 +418,13 @@
     <string name="routes_opening_google_maps">Abrindo no Google Maps</string>
     <string name="routes_opening_browser">Abrindo no navegador</string>
     <string name="map_layers_panel">Camadas do mapa</string>
-    <string name="map_layers_title">Camadas</string>
+    <string name="map_layers_title">Camadas e Mapa-base</string>
+    <string name="map_base_section">MAPA-BASE</string>
+    <string name="map_layers_section">CAMADAS DE INFORMA\u00c7\u00c3O</string>
+    <string name="map_base_normal">Normal</string>
+    <string name="map_base_satellite">Sat\u00e9lite</string>
+    <string name="map_base_hybrid">H\u00edbrido</string>
+    <string name="map_base_terrain">Terreno</string>
     <string name="map_layer_family">Familiares</string>
     <string name="map_layer_geofences">Geofences</string>
     <string name="map_layer_events">Eventos</string>

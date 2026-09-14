@@ -8,7 +8,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -22,6 +25,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,14 +41,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.famtrack.app.R
+import com.famtrack.app.data.local.MapBaseType
+import com.google.maps.android.compose.MapType
 
 /**
- * Controle de camadas do mapa principal (ETAPA 10D-1).
- * Familiares fica sempre ativa; as demais são opt-in e persistidas localmente
- * (MapLayerPrefs) pelo chamador.
+ * Controle de camadas do mapa principal (ETAPA 10D-1 + auditoria L3 C2).
+ * Painel em duas seções: MAPA-BASE (escolha única via RadioButton, muda só os
+ * tiles do Google Maps) e CAMADAS DE INFORMAÇÃO (switches opt-in). Familiares
+ * fica sempre ativa. Persistência local é do chamador (MapLayerPrefs).
  */
 @Composable
 fun MapLayerPanel(
+    baseType: MapBaseType,
+    onBaseTypeChange: (MapBaseType) -> Unit,
     geofencesOn: Boolean,
     eventsOn: Boolean,
     routesOn: Boolean,
@@ -72,7 +81,8 @@ fun MapLayerPanel(
         } else {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .widthIn(max = 290.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Row(
@@ -92,7 +102,44 @@ fun MapLayerPanel(
                         Icon(Icons.Filled.Close, contentDescription = null)
                     }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = stringResource(R.string.map_base_section),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                MapBaseRow(
+                    label = stringResource(R.string.map_base_normal),
+                    selected = baseType == MapBaseType.NORMAL,
+                    onClick = { if (baseType != MapBaseType.NORMAL) onBaseTypeChange(MapBaseType.NORMAL) }
+                )
+                MapBaseRow(
+                    label = stringResource(R.string.map_base_satellite),
+                    selected = baseType == MapBaseType.SATELLITE,
+                    onClick = { if (baseType != MapBaseType.SATELLITE) onBaseTypeChange(MapBaseType.SATELLITE) }
+                )
+                MapBaseRow(
+                    label = stringResource(R.string.map_base_hybrid),
+                    selected = baseType == MapBaseType.HYBRID,
+                    onClick = { if (baseType != MapBaseType.HYBRID) onBaseTypeChange(MapBaseType.HYBRID) }
+                )
+                MapBaseRow(
+                    label = stringResource(R.string.map_base_terrain),
+                    selected = baseType == MapBaseType.TERRAIN,
+                    onClick = { if (baseType != MapBaseType.TERRAIN) onBaseTypeChange(MapBaseType.TERRAIN) }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.map_layers_section),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(2.dp))
                 LayerRow(
                     icon = Icons.Filled.Check,
                     label = stringResource(R.string.map_layer_family),
@@ -139,6 +186,28 @@ fun MapLayerPanel(
 }
 
 @Composable
+private fun MapBaseRow(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@Composable
 private fun LayerRow(
     icon: ImageVector,
     label: String,
@@ -168,4 +237,12 @@ private fun LayerRow(
             onCheckedChange = onCheckedChange
         )
     }
+}
+
+/** Conversão para o tipo de tile do Google Maps (auditoria L3 C3). */
+fun MapBaseType.toGoogleMapType(): MapType = when (this) {
+    MapBaseType.SATELLITE -> MapType.SATELLITE
+    MapBaseType.HYBRID -> MapType.HYBRID
+    MapBaseType.TERRAIN -> MapType.TERRAIN
+    MapBaseType.NORMAL -> MapType.NORMAL
 }

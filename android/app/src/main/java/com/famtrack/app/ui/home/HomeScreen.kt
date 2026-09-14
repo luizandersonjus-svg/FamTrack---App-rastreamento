@@ -45,6 +45,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.famtrack.app.R
+import com.famtrack.app.data.local.MapBaseType
 import com.famtrack.app.data.local.MapLayer
 import com.famtrack.app.data.local.MapLayerPrefs
 import com.famtrack.app.data.model.Geofence
@@ -168,6 +169,9 @@ fun HomeScreen(
         mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.WEATHER))
     }
     var showLegend by remember { mutableStateOf(false) }
+    var mapBaseType by remember {
+        mutableStateOf(MapLayerPrefs.getBaseType(context))
+    }
     var familyEvents by remember { mutableStateOf<List<Event>>(emptyList()) }
     var selectedRouteMemberId by remember { mutableStateOf<String?>(null) }
     var routePeriod by remember { mutableStateOf(RoutePeriod.TODAY) }
@@ -951,7 +955,7 @@ fun HomeScreen(
                 ),
                 properties = MapProperties(
                     isMyLocationEnabled = hasLocationPermission,
-                    mapType = MapType.NORMAL
+                    mapType = mapBaseType.toGoogleMapType()
                 )
             ) {
                 val placedPositions = mutableListOf<android.graphics.Point>()
@@ -1129,6 +1133,11 @@ fun HomeScreen(
             }
 
             MapLayerPanel(
+                baseType = mapBaseType,
+                onBaseTypeChange = { type ->
+                    mapBaseType = type
+                    MapLayerPrefs.setBaseType(context, type)
+                },
                 geofencesOn = layerGeofences,
                 eventsOn = layerEvents,
                 routesOn = layerRoutes,
