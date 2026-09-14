@@ -1,5 +1,7 @@
 package com.famtrack.app.ui.home
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -81,10 +83,22 @@ fun MapLayerPanel(
         } else {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 290.dp)
+                    .widthIn(max = 360.dp)
+                    .heightIn(max = 390.dp)
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .width(36.dp)
+                        .height(4.dp)
+                        .background(
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                            RoundedCornerShape(50)
+                        )
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.fillMaxWidth()
