@@ -23,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -43,6 +44,12 @@ import java.time.ZoneId
 enum class RoutePeriod { TODAY, LAST_24H }
 
 data class MemberRouteOption(val userId: String, val displayName: String)
+
+/**
+ * Estado de carregamento da consulta de trajeto (TRAJ-2): estados explícitos
+ * de Loading / Empty / Error (com 'Tentar novamente') / Loaded.
+ */
+enum class RouteUiState { IDLE, LOADING, EMPTY, ERROR, LOADED }
 
 /** Intervalo [início, fim) em UTC para a consulta paginada de route_history. */
 fun routePeriodBounds(period: RoutePeriod, zone: ZoneId): Pair<String, String> {
@@ -113,11 +120,11 @@ fun RouteLayerPanel(
     members: List<MemberRouteOption>,
     selectedMemberId: String?,
     period: RoutePeriod,
-    loading: Boolean,
+    uiState: RouteUiState,
     hasRoute: Boolean,
-    error: Boolean,
     onMemberChange: (String) -> Unit,
     onPeriodChange: (RoutePeriod) -> Unit,
+    onRetry: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -197,30 +204,34 @@ fun RouteLayerPanel(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            when {
-                loading -> {
+            when (uiState) {
+                RouteUiState.LOADING -> {
                     Text(
                         text = stringResource(R.string.route_layer_loading),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                error -> {
+                RouteUiState.ERROR -> {
                     Text(
                         text = stringResource(R.string.route_layer_error),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error
                     )
+                    TextButton(onClick = onRetry) {
+                        Text(stringResource(R.string.route_retry))
+                    }
                 }
-                !hasRoute && selectedMemberId != null -> {
+                RouteUiState.EMPTY -> {
                     Text(
                         text = stringResource(R.string.route_layer_empty),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                RouteUiState.LOADED, RouteUiState.IDLE -> Unit
             }
-            if (!loading && hasRoute) {
+            if (uiState == RouteUiState.LOADED && hasRoute) {
                 Text(
                     text = stringResource(R.string.osrm_attribution),
                     style = MaterialTheme.typography.labelSmall,

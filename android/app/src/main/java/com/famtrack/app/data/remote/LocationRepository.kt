@@ -147,6 +147,7 @@ class LocationRepository {
     ): List<RoutePoint> {
         val points = mutableListOf<RoutePoint>()
         var from = 0L
+        var pages = 0
         while (true) {
             val page = client.from("route_history")
                 .select {
@@ -163,6 +164,11 @@ class LocationRepository {
             points += page
             if (page.size < ROUTE_PAGE_SIZE) break
             from += ROUTE_PAGE_SIZE
+            pages++
+            if (pages >= ROUTE_MAX_PAGES) {
+                Log.w(TAG, "Paginação de route_history excedeu $ROUTE_MAX_PAGES páginas (range não respeitado?); interrompida")
+                break
+            }
             if (points.size >= MAX_ROUTE_POINTS_PER_DAY) {
                 Log.w(TAG, "Dia com mais de $MAX_ROUTE_POINTS_PER_DAY pontos; resposta truncada")
                 break
@@ -398,6 +404,7 @@ class LocationRepository {
         private const val SYNC_TAG = "FamTrackRouteSync"
         private const val ROUTE_PAGE_SIZE = 1000L
         private const val MAX_ROUTE_POINTS_PER_DAY = 20_000
+        private const val ROUTE_MAX_PAGES = 50
         private const val MAX_SYNC_BATCH = 20
         private const val REALTIME_RETRY_MS = 5000L
 

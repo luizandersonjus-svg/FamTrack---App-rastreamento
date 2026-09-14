@@ -450,7 +450,8 @@
     <string name="route_layer_today">Hoje</string>
     <string name="route_layer_24h">\u00daltimas 24 h</string>
     <string name="route_layer_loading">Carregando trajeto\u2026</string>
-    <string name="route_layer_empty">Sem pontos neste per\u00edodo</string>
+    <string name="route_layer_empty">Nenhum trajeto registrado neste per\u00edodo</string>
+    <string name="route_retry">Tentar novamente</string>
     <string name="route_layer_error">N\u00e3o foi poss\u00edvel carregar o trajeto</string>
     <string name="route_layer_paused_empty">Nenhum membro com compartilhamento ativo</string>
     <string name="route_layer_stop">Perman\u00eancia</string>

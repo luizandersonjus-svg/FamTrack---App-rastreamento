@@ -44,6 +44,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.famtrack.app.BuildConfig
 import com.famtrack.app.R
 import com.famtrack.app.data.local.MapBaseType
 import com.famtrack.app.data.local.MapLayer
@@ -87,9 +88,11 @@ import com.google.android.gms.location.*
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import com.famtrack.app.util.parseIsoInstantMillis
 import com.famtrack.app.util.isInsideGeofence
 import com.famtrack.app.data.model.RoutePoint
@@ -104,6 +107,8 @@ private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 private const val LAYER_EVENTS_LIMIT = 20L
+private const val ROUTE_TAG = "FamTrackRoute"
+private const val ROUTE_FETCH_TIMEOUT_MS = 20_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -177,9 +182,8 @@ fun HomeScreen(
     var routePeriod by remember { mutableStateOf(RoutePeriod.TODAY) }
     var routeSegments by remember { mutableStateOf<List<MatchedSegment>>(emptyList()) }
     var routeStops by remember { mutableStateOf<List<RoutePoint>>(emptyList()) }
-    var routeLoading by remember { mutableStateOf(false) }
-    var routeError by remember { mutableStateOf(false) }
-    var routeLoaded by remember { mutableStateOf(false) }
+    var routeUiState by remember { mutableStateOf(RouteUiState.IDLE) }
+    var routeRetry by remember { mutableStateOf(0) }
     var weatherByMember by remember { mutableStateOf<Map<String, WeatherCondition>>(emptyMap()) }
     var weatherStatusByMember by remember { mutableStateOf<Map<String, WeatherDisplayState>>(emptyMap()) }
     var weatherLoading by remember { mutableStateOf(false) }
@@ -564,38 +568,66 @@ fun HomeScreen(
         if (!layerRoutes) {
             routeSegments = emptyList()
             routeStops = emptyList()
-            routeLoaded = false
-            routeError = false
+            routeUiState = RouteUiState.IDLE
         }
     }
 
     // Carrega o trajeto do membro/período via /route_history + OSRM (por
     // segmento), apenas quando a regra match>=2 permite. Membros pausados nunca
     // consultam; o "no-recordar" e garantido pelo gate acima e pela regra SQL.
-    LaunchedEffect(layerRoutes, familyId, selectedRouteMemberId, routePeriod, flagByMember) {
+    // TRAJ-2: timeout de 20s no conjunto, estados explícitos de Loading/Empty/
+    // Error/Loaded e relançamento de CancellationException (troca rápida de
+    // membro/período não vira erro falso). Logs técnicos só em DEBUG.
+    LaunchedEffect(
+        layerRoutes, familyId, selectedRouteMemberId, routePeriod, flagByMember, routeRetry
+    ) {
         val fid = familyId
         val mid = selectedRouteMemberId
         if (!layerRoutes || fid == null || mid == null) return@LaunchedEffect
         if (flagByMember[mid]?.sharing_paused == true) return@LaunchedEffect
-        routeLoading = true
-        routeError = false
+        routeUiState = RouteUiState.LOADING
+        val startedAt = System.currentTimeMillis()
+        if (BuildConfig.DEBUG) {
+            Log.d(ROUTE_TAG, "consulta trajeto: membro=$mid periodo=$routePeriod retry=$routeRetry")
+        }
         try {
-            val (startUtc, endUtc) = routePeriodBounds(
-                routePeriod, java.time.ZoneId.systemDefault()
-            )
-            val dayPoints = withContext(Dispatchers.IO) {
-                locationRepository.getRouteHistoryForDay(fid, mid, startUtc, endUtc)
+            withTimeout(ROUTE_FETCH_TIMEOUT_MS) {
+                val (startUtc, endUtc) = routePeriodBounds(
+                    routePeriod, java.time.ZoneId.systemDefault()
+                )
+                val dayPoints = withContext(Dispatchers.IO) {
+                    locationRepository.getRouteHistoryForDay(fid, mid, startUtc, endUtc)
+                }
+                if (BuildConfig.DEBUG) {
+                    Log.d(ROUTE_TAG, "route_history: ${dayPoints.size} pontos")
+                }
+                routeStops = buildStopMarkers(dayPoints)
+                val matched = withContext(Dispatchers.IO) {
+                    if (dayPoints.size >= 2) fetchMatchedRoute(dayPoints) else null
+                }
+                routeSegments = matched?.segments.orEmpty()
+                routeUiState =
+                    if (dayPoints.isEmpty()) RouteUiState.EMPTY else RouteUiState.LOADED
             }
-            routeStops = buildStopMarkers(dayPoints)
-            val matched = withContext(Dispatchers.IO) {
-                if (dayPoints.size >= 2) fetchMatchedRoute(dayPoints) else null
+        } catch (e: TimeoutCancellationException) {
+            routeUiState = RouteUiState.ERROR
+            if (BuildConfig.DEBUG) {
+                Log.d(ROUTE_TAG, "timeout de ${ROUTE_FETCH_TIMEOUT_MS}ms excedido")
             }
-            routeSegments = matched?.segments.orEmpty()
-            routeLoaded = true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            routeError = true
-        } finally {
-            routeLoading = false
+            routeUiState = RouteUiState.ERROR
+            if (BuildConfig.DEBUG) {
+                Log.d(ROUTE_TAG, "falha na consulta de trajeto: ${e.message}")
+            }
+        }
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                ROUTE_TAG,
+                "trajeto concluído em ${System.currentTimeMillis() - startedAt}ms: " +
+                    "estado=$routeUiState segmentos=${routeSegments.size} paradas=${routeStops.size}"
+            )
         }
     }
 
@@ -1252,12 +1284,12 @@ label = {
                     members = routeMembers,
                     selectedMemberId = selectedRouteMemberId,
                     period = routePeriod,
-                    loading = routeLoading,
-                    hasRoute = routeLoaded &&
+                    uiState = routeUiState,
+                    hasRoute = routeUiState == RouteUiState.LOADED &&
                         (routeSegments.isNotEmpty() || routeStops.isNotEmpty()),
-                    error = routeError,
                     onMemberChange = { selectedRouteMemberId = it },
                     onPeriodChange = { routePeriod = it },
+                    onRetry = { routeRetry++ },
                     onDismiss = {
                         layerRoutes = false
                         MapLayerPrefs.setOn(context, MapLayer.ROUTES, false)
