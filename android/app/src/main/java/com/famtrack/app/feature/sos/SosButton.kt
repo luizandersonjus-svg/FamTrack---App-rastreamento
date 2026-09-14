@@ -72,6 +72,13 @@ fun SosButton(
         modifier = modifier
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.error)
+            .drawBehind {
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.22f),
+                    radius = size.minDimension / 2f - 1.dp.toPx(),
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
+            }
             .semantics(mergeDescendants = true) {
                 contentDescription = "SOS. Segure por 3 segundos para acionar"
             }
