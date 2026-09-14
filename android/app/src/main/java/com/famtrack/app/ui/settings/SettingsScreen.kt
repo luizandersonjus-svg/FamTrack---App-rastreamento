@@ -166,6 +166,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
@@ -202,7 +203,10 @@ fun SettingsScreen(
                                     )
                                 }
                             }
-                            TextButton(onClick = { showLogoutDialog = true }) {
+                            TextButton(
+                                onClick = { showLogoutDialog = true },
+                                modifier = Modifier.height(48.dp)
+                            ) {
                                 Text(
                                     text = stringResource(R.string.settings_logout_confirm),
                                     color = MaterialTheme.colorScheme.error
@@ -256,12 +260,13 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
                         text = stringResource(R.string.settings_speed_subtitle),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
-                    Row(
+                    FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         speedOptions.forEach { opt ->
@@ -845,8 +850,8 @@ fun SettingsItem(
             )
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
             )
         }
     }
@@ -879,8 +884,8 @@ fun SettingsSwitchItem(
             )
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
             )
         }
         Switch(
