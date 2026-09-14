@@ -7,8 +7,13 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -39,7 +44,7 @@ import kotlinx.coroutines.launch
 private const val HOLD_MILLIS = 3000L
 
 /**
- * Botão circular de SOS (F5).
+ * Botão quadrado de SOS (F5), estilo "gaveta" do redesenho visual.
  *
  * Gestos:
  *  - Segurar o dedo pressionado por 3 segundos -> dispara [onTrigger] (envio do SOS).
@@ -70,12 +75,12 @@ fun SosButton(
 
     Box(
         modifier = modifier
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.error)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFFE55A4F))
             .drawBehind {
                 drawCircle(
                     color = Color.White.copy(alpha = 0.22f),
-                    radius = size.minDimension / 2f - 1.dp.toPx(),
+                    radius = size.minDimension / 2f - 3.dp.toPx(),
                     style = Stroke(width = 1.5.dp.toPx())
                 )
             }
@@ -89,9 +94,7 @@ fun SosButton(
                         color = Color.White.copy(alpha = 0.9f),
                         startAngle = -90f,
                         sweepAngle = sweep,
-                        useCenter = false,
-                        topLeft = Offset(3.dp.toPx(), 3.dp.toPx()),
-                        size = Size(size.width - 6.dp.toPx(), size.height - 6.dp.toPx()),
+                        useCenter = true,
                         style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
                     )
                 }
@@ -124,11 +127,23 @@ fun SosButton(
             },
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = "SOS",
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 16.sp
-        )
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+        ) {
+            Icon(
+                Icons.Filled.NotificationsActive,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = Color.White
+            )
+            Text(
+                text = "SOS",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp
+            )
+        }
     }
 }

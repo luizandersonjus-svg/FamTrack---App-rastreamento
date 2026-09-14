@@ -13,24 +13,24 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val LightColorScheme = lightColorScheme(
-    primary = Primary,
-    onPrimary = White,
-    primaryContainer = Blue100,
-    onPrimaryContainer = Primary,
-    secondary = Secondary,
-    onSecondary = White,
-    secondaryContainer = Green100,
-    onSecondaryContainer = Green700,
-    tertiary = Orange500,
+    primary = Teal,
+    onPrimary = Color.White,
+    primaryContainer = PrimaryContainer,
+    onPrimaryContainer = TealDark,
+    secondary = TealDark,
+    onSecondary = Color.White,
+    secondaryContainer = SecondaryContainer,
+    onSecondaryContainer = TealDark,
+    tertiary = Coral,
     background = Background,
     onBackground = TextPrimary,
     surface = Surface,
     onSurface = TextPrimary,
-    surfaceVariant = Gray100,
+    surfaceVariant = Color(0xFFEFF1F3),
     onSurfaceVariant = TextSecondary,
-    error = Red500,
-    onError = White,
-    outline = Gray200
+    error = Coral,
+    onError = Color.White,
+    outline = Divider
 )
 
 private val DarkColorScheme = darkColorScheme(
@@ -65,7 +65,7 @@ fun FamTrackTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.primary.toArgb()
+            window.statusBarColor = colorScheme.surface.toArgb()
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }

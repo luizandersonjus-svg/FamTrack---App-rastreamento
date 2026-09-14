@@ -778,14 +778,15 @@ fun HomeScreen(
                     Text(
                         "FamTrack",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp
+                        fontSize = 22.sp,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                    titleContentColor = MaterialTheme.colorScheme.primary
                 ),
-                actions = {
+                navigationIcon = {
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(
                             Icons.Outlined.Settings,
@@ -793,6 +794,8 @@ fun HomeScreen(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                },
+                actions = {
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
                             Icon(
@@ -862,7 +865,8 @@ fun HomeScreen(
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 8.dp
+                tonalElevation = 0.dp,
+                windowInsets = WindowInsets.navigationBars
             ) {
                 tabs.forEachIndexed { index, title ->
                     NavigationBarItem(
@@ -896,15 +900,16 @@ fun HomeScreen(
                                 )
                             }
                         },
-                        label = {
-                            Text(
-                                title,
-                                fontSize = 10.sp,
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
+label = {
+                        Text(
+                            title,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                    },
                         selected = selectedTab == index,
                         onClick = {
                             selectedTab = index
@@ -1167,6 +1172,17 @@ fun HomeScreen(
                     MapLayerPrefs.setOn(context, MapLayer.WEATHER, on)
                 },
                 onShowLegend = { showLegend = !showLegend },
+                members = familyLocations
+                    .distinctBy { it.user_id }
+                    .sortedBy { it.user_id != userId }
+                    .map { loc ->
+                        val info = memberInfos[loc.user_id]
+                        LayerMember(
+                            id = loc.user_id,
+                            avatarUrl = info?.avatar_url,
+                            name = info?.display_name ?: "Membro"
+                        )
+                    },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(start = 16.dp, end = 16.dp, bottom = 152.dp)
@@ -1368,29 +1384,44 @@ fun HomeScreen(
             Card(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 8.dp),
-                shape = RoundedCornerShape(24.dp),
+                    .padding(top = 10.dp)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(40.dp)
+                    ),
+                shape = RoundedCornerShape(40.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
-                Text(
-                    text = buildString {
-                        append(familyName ?: "Família")
-                        append(" • ")
-                        append(familyLocations.size)
-                        append(if (familyLocations.size == 1) " membro" else " membros")
-                        val steps = currentSteps
-                        if (steps != null && steps.first != null) {
-                            append(" • ${steps.first}: ${steps.second} passos")
-                        }
-                    },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = buildString {
+                            append(familyName ?: "Família")
+                            append(" • ")
+                            append(familyLocations.size)
+                            append(if (familyLocations.size == 1) " membro" else " membros")
+                            val steps = currentSteps
+                            if (steps != null && steps.first != null) {
+                                append(" • ${steps.first}: ${steps.second} passos")
+                            }
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        Icons.Filled.ArrowDropDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
 
             if (activeSosAlerts.isNotEmpty()) {
@@ -1620,93 +1651,80 @@ fun HomeScreen(
                         bottom = if (membersPanelExpanded) 236.dp else 88.dp
                     ),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Surface(
-                    shape = RoundedCornerShape(28.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.secondary,
+                    shadowElevation = 6.dp,
+                    modifier = Modifier.size(56.dp)
+                ) {
+                    IconButton(
+                        onClick = {
+                            currentLocation?.let { (lat, lon) ->
+                                scope.launch {
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.newLatLngZoom(
+                                            com.google.android.gms.maps.model.LatLng(lat, lon),
+                                            15f
+                                        ),
+                                        500
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.MyLocation,
+                            contentDescription = stringResource(R.string.home_action_center),
+                            modifier = Modifier.size(26.dp),
+                            tint = Color.White
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 6.dp,
-                    tonalElevation = 2.dp
+                    modifier = Modifier.size(56.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    IconButton(
+                        onClick = {
+                            if (!checkoutBusy) {
+                                scope.launch {
+                                    checkoutBusy = true
+                                    try {
+                                        val outcome = CheckInRepository()
+                                            .checkIn(context, places)
+                                        sosMessage = when (outcome) {
+                                            CheckInOutcome.SUCCESS ->
+                                                context.getString(R.string.checkin_done)
+                                            CheckInOutcome.NO_PERMISSION ->
+                                                context.getString(R.string.checkin_no_perm)
+                                            CheckInOutcome.PAUSED ->
+                                                context.getString(R.string.checkin_paused)
+                                            CheckInOutcome.NO_LOCATION ->
+                                                context.getString(R.string.checkin_no_location)
+                                            CheckInOutcome.TIMEOUT ->
+                                                context.getString(R.string.checkin_timeout)
+                                            CheckInOutcome.ERROR ->
+                                                context.getString(R.string.checkin_fail)
+                                        }
+                                    } finally {
+                                        checkoutBusy = false
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(56.dp)
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface,
-                            shadowElevation = 6.dp,
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    currentLocation?.let { (lat, lon) ->
-                                        scope.launch {
-                                            cameraPositionState.animate(
-                                                CameraUpdateFactory.newLatLngZoom(
-                                                    com.google.android.gms.maps.model.LatLng(lat, lon),
-                                                    15f
-                                                ),
-                                                500
-                                            )
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.MyLocation,
-                                    contentDescription = stringResource(R.string.home_action_center),
-                                    modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface,
-                            shadowElevation = 6.dp,
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    if (!checkoutBusy) {
-                                        scope.launch {
-                                            checkoutBusy = true
-                                            try {
-                                                val outcome = CheckInRepository()
-                                                    .checkIn(context, places)
-                                                sosMessage = when (outcome) {
-                                                    CheckInOutcome.SUCCESS ->
-                                                        context.getString(R.string.checkin_done)
-                                                    CheckInOutcome.NO_PERMISSION ->
-                                                        context.getString(R.string.checkin_no_perm)
-                                                    CheckInOutcome.PAUSED ->
-                                                        context.getString(R.string.checkin_paused)
-                                                    CheckInOutcome.NO_LOCATION ->
-                                                        context.getString(R.string.checkin_no_location)
-                                                    CheckInOutcome.TIMEOUT ->
-                                                        context.getString(R.string.checkin_timeout)
-                                                    CheckInOutcome.ERROR ->
-                                                        context.getString(R.string.checkin_fail)
-                                                }
-                                            } finally {
-                                                checkoutBusy = false
-                                            }
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.size(48.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = stringResource(R.string.checkin_cd),
-                                    modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = stringResource(R.string.checkin_cd),
+                            modifier = Modifier.size(26.dp),
+                            tint = MaterialTheme.colorScheme.secondary
+                        )
                     }
                 }
                 SosButton(
@@ -1715,8 +1733,8 @@ fun HomeScreen(
                         sosMessage = context.getString(R.string.sos_hold_hint_tap)
                     },
                     modifier = Modifier
-                        .size(64.dp)
-                        .shadow(8.dp, CircleShape)
+                        .size(56.dp)
+                        .shadow(8.dp, RoundedCornerShape(18.dp))
                 )
             }
 
