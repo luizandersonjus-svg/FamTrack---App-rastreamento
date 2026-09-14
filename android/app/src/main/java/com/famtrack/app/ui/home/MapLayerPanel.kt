@@ -83,7 +83,8 @@ fun MapLayerPanel(
     onWeatherChange: (Boolean) -> Unit,
     onShowLegend: () -> Unit,
     onDismiss: () -> Unit,
-    members: List<LayerMember> = emptyList()
+    members: List<LayerMember> = emptyList(),
+    weatherRows: List<SheetWeatherRow> = emptyList()
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -200,6 +201,12 @@ fun MapLayerPanel(
                 enabled = true,
                 onCheckedChange = onWeatherChange
             )
+            if (weatherOn) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
+                Spacer(modifier = Modifier.height(12.dp))
+                WeatherFamilyCard(rows = weatherRows)
+            }
             TextButton(
                 onClick = onShowLegend,
                 modifier = Modifier.align(Alignment.Start)

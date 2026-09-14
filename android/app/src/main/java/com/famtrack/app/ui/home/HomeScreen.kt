@@ -181,6 +181,7 @@ fun HomeScreen(
     var routeError by remember { mutableStateOf(false) }
     var routeLoaded by remember { mutableStateOf(false) }
     var weatherByMember by remember { mutableStateOf<Map<String, WeatherCondition>>(emptyMap()) }
+    var weatherStatusByMember by remember { mutableStateOf<Map<String, WeatherDisplayState>>(emptyMap()) }
     var weatherLoading by remember { mutableStateOf(false) }
     var flagByMember by remember { mutableStateOf<Map<String, MemberFlags>>(emptyMap()) }
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -451,28 +452,61 @@ fun HomeScreen(
             .distinctBy { it.user_id }
             .filter { flagByMember[it.user_id]?.sharing_paused != true }
         weatherLoading = active.isNotEmpty()
-        try {
-            val fetched = withContext(Dispatchers.IO) {
-                active.mapNotNull { loc ->
-                    try {
-                        fetchWeatherAt(loc.latitude, loc.longitude)
-                            ?.let { loc.user_id to it }
-                    } catch (e: Exception) {
+        val status = mutableMapOf<String, WeatherDisplayState>()
+        val fetched = withContext(Dispatchers.IO) {
+            active.mapNotNull { loc ->
+                val uid = loc.user_id
+                if (loc.latitude == 0.0 && loc.longitude == 0.0) {
+                    status[uid] = WeatherDisplayState.NO_LOCATION
+                    return@mapNotNull null
+                }
+                try {
+                    val cond = fetchWeatherAt(loc.latitude, loc.longitude)
+                    if (cond != null) {
+                        status[uid] = WeatherDisplayState.OK
+                        uid to cond
+                    } else {
+                        // Sem exceção, resposta sem dados: mantém cache se já existir.
+                        logWeatherDebug("clima($uid): resposta sem dados")
+                        status[uid] = if (weatherByMember[uid] != null) {
+                            WeatherDisplayState.OK
+                        } else {
+                            WeatherDisplayState.UNAVAILABLE
+                        }
                         null
                     }
-                }.toMap()
-            }
-            weatherByMember = fetched
-        } catch (e: Exception) {
-            // Mantem o ultimo conjunto em falhas de rede.
-        } finally {
-            weatherLoading = false
+                } catch (e: Exception) {
+                    logWeatherDebug("clima($uid): excecao -> ${e.message}")
+                    status[uid] = if (weatherByMember[uid] != null) {
+                        WeatherDisplayState.OK
+                    } else {
+                        WeatherDisplayState.UNAVAILABLE
+                    }
+                    null
+                }
+            }.toMap()
         }
+        weatherByMember = weatherByMember + fetched
+        weatherStatusByMember = status
+        weatherLoading = false
     }
+    // Reexecuta quando o conjunto de membros ativos ou os flags mudam, e
+    // mantém fresco com uma atualização periódica de 5min enquanto estiver ON.
+    val currentRefresh by rememberUpdatedState(refreshWeather)
+    val activeMemberIds = familyLocations
+        .distinctBy { it.user_id }
+        .filter { flagByMember[it.user_id]?.sharing_paused != true }
+        .map { it.user_id }
+        .sorted()
 
-    // Ao ligar a camada de Clima, consulta na hora (o loop abaixo mantém fresco).
-    LaunchedEffect(layerWeather, familyId) {
-        if (layerWeather) refreshWeather()
+    LaunchedEffect(layerWeather, familyId, activeMemberIds) {
+        if (layerWeather) {
+            currentRefresh()
+            while (true) {
+                kotlinx.coroutines.delay(5 * 60_000L)
+                currentRefresh()
+            }
+        }
     }
 
     // Badge de nao-lidas da tab Notificacoes (ETAPA 12B): atualiza quando o
@@ -499,7 +533,6 @@ fun HomeScreen(
                         }
                     }
                 }
-                if (layerWeather) refreshWeather()
                 delay(NOTIF_BADGE_REFRESH_MS)
             }
         }
@@ -1185,6 +1218,19 @@ label = {
                                 avatarUrl = info?.avatar_url,
                                 name = info?.display_name ?: "Membro"
                             )
+                        },
+                    weatherRows = familyLocations
+                        .distinctBy { it.user_id }
+                        .map { loc ->
+                            val uid = loc.user_id
+                            val info = memberInfos[uid]
+                            SheetWeatherRow(
+                                userId = uid,
+                                displayName = info?.display_name ?: "Membro",
+                                paused = flagByMember[uid]?.sharing_paused == true,
+                                state = weatherStatusByMember[uid] ?: WeatherDisplayState.LOADING,
+                                text = describeWeather(weatherByMember[uid], context)
+                            )
                         }
                 )
             }
@@ -1216,32 +1262,6 @@ label = {
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(top = 84.dp, start = 16.dp)
-                )
-            }
-
-            if (layerWeather) {
-                val weatherRows = familyLocations
-                    .distinctBy { it.user_id }
-                    .map { loc ->
-                        WeatherRow(
-                            userId = loc.user_id,
-                            displayName = memberInfos[loc.user_id]?.display_name ?: "Membro",
-                            paused = flagByMember[loc.user_id]?.sharing_paused == true,
-                            text = describeWeather(
-                                weatherByMember[loc.user_id], context
-                            )
-                        )
-                    }
-                WeatherLayerCard(
-                    rows = weatherRows,
-                    loading = weatherLoading,
-                    onDismiss = {
-                        layerWeather = false
-                        MapLayerPrefs.setOn(context, MapLayer.WEATHER, false)
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 96.dp)
                 )
             }
 

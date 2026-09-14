@@ -454,8 +454,10 @@
     <string name="route_layer_paused_empty">Nenhum membro com compartilhamento ativo</string>
     <string name="route_layer_stop">Perman\u00eancia</string>
     <string name="weather_card_title">Clima da fam\u00edlia</string>
-    <string name="weather_loading">Carregando clima\u2026</string>
-    <string name="weather_paused">compartilhamento pausado</string>
+    <string name="weather_loading">Buscando clima\u2026</string>
+    <string name="weather_no_location">Sem localiza\u00e7\u00e3o recente</string>
+    <string name="weather_unavailable">Clima indispon\u00edvel</string>
+    <string name="weather_paused">Compartilhamento pausado</string>
     <string name="weather_no_data">sem dados</string>
     <string name="weather_clear">C\u00e9u limpo</string>
     <string name="weather_partly">Parcialmente nublado</string>
@@ -467,7 +469,7 @@
     <string name="weather_showers">Aguaceiro</string>
     <string name="weather_thunder">Tempestade</string>
     <string name="weather_na">Sem classifica\u00e7\u00e3o</string>
-    <string name="weather_source">Condi\u00e7\u00f5es: Open-Meteo</string>
+    <string name="weather_source">Fonte: Open-Meteo</string>
     <string name="back">Voltar</string>
     <string name="notifications_title">Notifica\u00e7\u00f5es</string>
     <string name="notifications_exit_selection">Sair da sele\u00e7\u00e3o</string>
