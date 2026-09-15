@@ -13,6 +13,8 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -90,14 +92,30 @@ internal suspend fun fetchMatchedRoute(
     val gaps = gapIndices.map { MatchGap(afterIndex = it, durationMillis = gapDurationMillis(points, it)) }
     val rawSegments = splitSegments(points)
 
+    val work = rawSegments.mapNotNull { raw ->
+        if (raw.size < 2) null
+        else {
+            val decimated = capPoints(douglasPeucker(raw, epsilonMeters))
+            decimated to raw
+        }
+    }
+
+    // TRAJ-2b: segmentos são independentes — casa concorrentemente (ordem
+    // preservada via awaitAll). Com o endpoint público do OSRM degradado/lento,
+    // o tempo total cai de N*duracao p/ ~max(duracao), permitindo o fallback
+    // PARTIAL concluir dentro do withTimeout do HomeScreen; com servidor ok,
+    // apenas acelera sem mudar o resultado.
+    val deferred = coroutineScope {
+        work.map { (decimated, raw) ->
+            async { matchSingleSegment(decimated, raw) }
+        }
+    }
+    val matchedInOrder = deferred.awaitAll()
+
     var matched = 0
-    var total = 0
+    val total = work.sumOf { it.first.size }
     val segments = mutableListOf<MatchedSegment>()
-    for (raw in rawSegments) {
-        if (raw.size < 2) continue
-        val decimated = capPoints(douglasPeucker(raw, epsilonMeters))
-        total += decimated.size
-        val seg = matchSingleSegment(decimated, raw)
+    for (seg in matchedInOrder) {
         if (seg.status == RouteMatchStatus.MATCHED) matched += seg.points.size
         segments += seg
     }
