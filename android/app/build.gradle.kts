@@ -95,6 +95,10 @@ dependencies {
     // Ktor (required by supabase-kt) — 3.4.1+ corrige KTOR-9348: decoders base64
     // aceitam padding opcional, evitando crash do realtime com JWT sem padding.
     implementation("io.ktor:ktor-client-cio:3.4.1")
+    // Motor OkHttp para o cliente OSRM (CORR-0): TLS nativo do Android (ALPN.)
+    // O motor CIO (TLS puro Kotlin) falhava 100% do handshake com o endpoint
+    // demo do OSRM no Galaxy A36; com OkHttp o HTTPS usa a pilha TLS do SO.
+    implementation("io.ktor:ktor-client-okhttp:3.4.1")
 
     // Google Maps
     implementation("com.google.android.gms:play-services-maps:19.1.0")

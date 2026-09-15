@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- DEBUG: harness para ajustar concorrência/retries do OSRM via adb.
+         exportado=true apenas em builds de debug e só altera limites internos
+         de rede (nenhum dado sensível). -->
+    <application>
+        <receiver
+            android:name=".debug.OsrmTuningReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.famtrack.app.debug.OSRM_TUNING" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>
