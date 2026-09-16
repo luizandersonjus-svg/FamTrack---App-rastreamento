@@ -88,17 +88,11 @@ import com.google.android.gms.location.*
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.maps.android.compose.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import com.famtrack.app.util.parseIsoInstantMillis
 import com.famtrack.app.util.isInsideGeofence
-import com.famtrack.app.data.model.RoutePoint
-import com.famtrack.app.ui.history.MatchedSegment
-import com.famtrack.app.ui.history.RouteMatchStatus
-import com.famtrack.app.ui.history.fetchMatchedRoute
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -107,8 +101,6 @@ private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 private const val LAYER_EVENTS_LIMIT = 20L
-private const val ROUTE_TAG = "FamTrackRoute"
-private const val ROUTE_FETCH_TIMEOUT_MS = 20_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -167,9 +159,6 @@ fun HomeScreen(
     var layerEvents by remember {
         mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.EVENTS))
     }
-    var layerRoutes by remember {
-        mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.ROUTES))
-    }
     var layerWeather by remember {
         mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.WEATHER))
     }
@@ -178,12 +167,6 @@ fun HomeScreen(
         mutableStateOf(MapLayerPrefs.getBaseType(context))
     }
     var familyEvents by remember { mutableStateOf<List<Event>>(emptyList()) }
-    var selectedRouteMemberId by remember { mutableStateOf<String?>(null) }
-    var routePeriod by remember { mutableStateOf(RoutePeriod.TODAY) }
-    var routeSegments by remember { mutableStateOf<List<MatchedSegment>>(emptyList()) }
-    var routeStops by remember { mutableStateOf<List<RoutePoint>>(emptyList()) }
-    var routeUiState by remember { mutableStateOf(RouteUiState.IDLE) }
-    var routeRetry by remember { mutableStateOf(0) }
     var weatherByMember by remember { mutableStateOf<Map<String, WeatherCondition>>(emptyMap()) }
     var weatherStatusByMember by remember { mutableStateOf<Map<String, WeatherDisplayState>>(emptyMap()) }
     var weatherLoading by remember { mutableStateOf(false) }
@@ -553,81 +536,6 @@ fun HomeScreen(
             } catch (e: Exception) {
                 // Mantem o ultimo conjunto em falhas de rede.
             }
-        }
-    }
-
-    // ETAPA 10D-3: ao ligar a camada de Trajetos, escolhe o primeiro membro com
-    // compartilhamento ativo (e nunca membros pausados). Ao desligar, limpa.
-    LaunchedEffect(layerRoutes, familyLocations, flagByMember) {
-        if (layerRoutes && selectedRouteMemberId == null) {
-            val first = familyLocations.firstOrNull {
-                flagByMember[it.user_id]?.sharing_paused != true
-            }
-            selectedRouteMemberId = first?.user_id
-        }
-        if (!layerRoutes) {
-            routeSegments = emptyList()
-            routeStops = emptyList()
-            routeUiState = RouteUiState.IDLE
-        }
-    }
-
-    // Carrega o trajeto do membro/período via /route_history + OSRM (por
-    // segmento), apenas quando a regra match>=2 permite. Membros pausados nunca
-    // consultam; o "no-recordar" e garantido pelo gate acima e pela regra SQL.
-    // TRAJ-2: timeout de 20s no conjunto, estados explícitos de Loading/Empty/
-    // Error/Loaded e relançamento de CancellationException (troca rápida de
-    // membro/período não vira erro falso). Logs técnicos só em DEBUG.
-    LaunchedEffect(
-        layerRoutes, familyId, selectedRouteMemberId, routePeriod, flagByMember, routeRetry
-    ) {
-        val fid = familyId
-        val mid = selectedRouteMemberId
-        if (!layerRoutes || fid == null || mid == null) return@LaunchedEffect
-        if (flagByMember[mid]?.sharing_paused == true) return@LaunchedEffect
-        routeUiState = RouteUiState.LOADING
-        val startedAt = System.currentTimeMillis()
-        if (BuildConfig.DEBUG) {
-            Log.d(ROUTE_TAG, "consulta trajeto: membro=$mid periodo=$routePeriod retry=$routeRetry")
-        }
-        try {
-            withTimeout(ROUTE_FETCH_TIMEOUT_MS) {
-                val (startUtc, endUtc) = routePeriodBounds(
-                    routePeriod, java.time.ZoneId.systemDefault()
-                )
-                val dayPoints = withContext(Dispatchers.IO) {
-                    locationRepository.getRouteHistoryForDay(fid, mid, startUtc, endUtc)
-                }
-                if (BuildConfig.DEBUG) {
-                    Log.d(ROUTE_TAG, "route_history: ${dayPoints.size} pontos")
-                }
-                routeStops = buildStopMarkers(dayPoints)
-                val matched = withContext(Dispatchers.IO) {
-                    if (dayPoints.size >= 2) fetchMatchedRoute(dayPoints) else null
-                }
-                routeSegments = matched?.segments.orEmpty()
-                routeUiState =
-                    if (dayPoints.isEmpty()) RouteUiState.EMPTY else RouteUiState.LOADED
-            }
-        } catch (e: TimeoutCancellationException) {
-            routeUiState = RouteUiState.ERROR
-            if (BuildConfig.DEBUG) {
-                Log.d(ROUTE_TAG, "timeout de ${ROUTE_FETCH_TIMEOUT_MS}ms excedido")
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            routeUiState = RouteUiState.ERROR
-            if (BuildConfig.DEBUG) {
-                Log.d(ROUTE_TAG, "falha na consulta de trajeto: ${e.message}")
-            }
-        }
-        if (BuildConfig.DEBUG) {
-            Log.d(
-                ROUTE_TAG,
-                "trajeto concluído em ${System.currentTimeMillis() - startedAt}ms: " +
-                    "estado=$routeUiState segmentos=${routeSegments.size} paradas=${routeStops.size}"
-            )
         }
     }
 
@@ -1166,49 +1074,6 @@ label = {
                     }
                     PlacesMapOverlay(places)
                 }
-                if (layerRoutes && routeSegments.isNotEmpty()) {
-                    routeSegments.forEach { seg ->
-                        val dashed = seg.status != RouteMatchStatus.MATCHED
-                        Polyline(
-                            points = seg.points,
-                            color = if (dashed) {
-                                MaterialTheme.colorScheme.outline
-                            } else {
-                                MaterialTheme.colorScheme.tertiary
-                            },
-                            width = 6f,
-                            zIndex = 1f,
-                            pattern = if (dashed) {
-                                listOf(
-                                    com.google.android.gms.maps.model.Dash(15f),
-                                    com.google.android.gms.maps.model.Gap(10f)
-                                )
-                            } else {
-                                emptyList()
-                            }
-                        )
-                    }
-                    routeStops.forEach { stop ->
-                        val stopName = geofences.firstOrNull { g ->
-                            isInsideGeofence(
-                                stop.latitude, stop.longitude,
-                                g.center_lat, g.center_lon, g.radius_meters
-                            )
-                        }?.name ?: context.getString(R.string.route_layer_stop)
-                        Marker(
-                            state = MarkerState(
-                                position = com.google.android.gms.maps.model.LatLng(
-                                    stop.latitude,
-                                    stop.longitude
-                                )
-                            ),
-                            title = stopName,
-                            icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
-                                .defaultMarker(com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_CYAN),
-                            zIndex = 0.45f
-                        )
-                    }
-                }
             }
 
             if (layersSheetOpen) {
@@ -1220,7 +1085,6 @@ label = {
                     },
                     geofencesOn = layerGeofences,
                     eventsOn = layerEvents,
-                    routesOn = layerRoutes,
                     weatherOn = layerWeather,
                     onGeofencesChange = { on ->
                         layerGeofences = on
@@ -1229,10 +1093,6 @@ label = {
                     onEventsChange = { on ->
                         layerEvents = on
                         MapLayerPrefs.setOn(context, MapLayer.EVENTS, on)
-                    },
-                    onRoutesChange = { on ->
-                        layerRoutes = on
-                        MapLayerPrefs.setOn(context, MapLayer.ROUTES, on)
                     },
                     onWeatherChange = { on ->
                         layerWeather = on
@@ -1264,36 +1124,6 @@ label = {
                                 text = describeWeather(weatherByMember[uid], context)
                             )
                         }
-                )
-            }
-
-            // Painel "Trajeto recente" como ModalBottomSheet compacto (TRAJ-1):
-            // oculto enquanto o sheet de Camadas está aberto para nunca haver
-            // dois modais simultâneos.
-            if (layerRoutes && !layersSheetOpen) {
-                val routeMembers = familyLocations
-                    .distinctBy { it.user_id }
-                    .filter { flagByMember[it.user_id]?.sharing_paused != true }
-                    .map {
-                        MemberRouteOption(
-                            userId = it.user_id,
-                            displayName = memberInfos[it.user_id]?.display_name ?: "Membro"
-                        )
-                    }
-                RouteLayerPanel(
-                    members = routeMembers,
-                    selectedMemberId = selectedRouteMemberId,
-                    period = routePeriod,
-                    uiState = routeUiState,
-                    hasRoute = routeUiState == RouteUiState.LOADED &&
-                        (routeSegments.isNotEmpty() || routeStops.isNotEmpty()),
-                    onMemberChange = { selectedRouteMemberId = it },
-                    onPeriodChange = { routePeriod = it },
-                    onRetry = { routeRetry++ },
-                    onDismiss = {
-                        layerRoutes = false
-                        MapLayerPrefs.setOn(context, MapLayer.ROUTES, false)
-                    }
                 )
             }
 
@@ -1662,9 +1492,8 @@ label = {
             // Coluna de controles do mapa: utilitárias (Minha localização e Check-in)
             // agrupadas num bloco; SOS separado, dominante e em cor de
             // emergência. Sobe quando o painel de membros está expandido,
-            // para nunca ficar sobreposto a ele. Oculta com o sheet de Camadas
-            // OU com o painel de Trajeto aberto (TRAJ-1).
-            if (!layersSheetOpen && !layerRoutes) {
+            // para nunca ficar sobreposto a ele. Oculta com o sheet de Camadas.
+            if (!layersSheetOpen) {
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)

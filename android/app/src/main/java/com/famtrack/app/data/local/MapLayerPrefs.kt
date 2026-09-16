@@ -12,7 +12,6 @@ enum class MapLayer(val prefKey: String, val defaultOn: Boolean) {
     FAMILY("family", true),
     GEOFENCES("geofences", false),
     EVENTS("events", false),
-    ROUTES("routes", false),
     WEATHER("weather", false)
 }
 

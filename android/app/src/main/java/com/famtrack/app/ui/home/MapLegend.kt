@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.famtrack.app.R
 
 /**
- * Legenda simples das camadas do mapa (ETAPA 10D): localização atual, trajeto,
+ * Legenda simples das camadas do mapa (ETAPA 10D): localização atual,
  * geofence, evento e dado stale.
  */
 @Composable
@@ -70,11 +70,6 @@ fun MapLegend(
                 color = MaterialTheme.colorScheme.primary,
                 dot = true,
                 label = stringResource(R.string.map_legend_current)
-            )
-            LegendRow(
-                color = MaterialTheme.colorScheme.tertiary,
-                dot = false,
-                label = stringResource(R.string.map_legend_route)
             )
             LegendRow(
                 color = MaterialTheme.colorScheme.secondary,

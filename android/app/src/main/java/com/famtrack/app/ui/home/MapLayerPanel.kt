@@ -75,11 +75,9 @@ fun MapLayerPanel(
     onBaseTypeChange: (MapBaseType) -> Unit,
     geofencesOn: Boolean,
     eventsOn: Boolean,
-    routesOn: Boolean,
     weatherOn: Boolean,
     onGeofencesChange: (Boolean) -> Unit,
     onEventsChange: (Boolean) -> Unit,
-    onRoutesChange: (Boolean) -> Unit,
     onWeatherChange: (Boolean) -> Unit,
     onShowLegend: () -> Unit,
     onDismiss: () -> Unit,
@@ -186,13 +184,6 @@ fun MapLayerPanel(
                 checked = eventsOn,
                 enabled = true,
                 onCheckedChange = onEventsChange
-            )
-            LayerRow(
-                icon = Icons.Filled.Navigation,
-                label = stringResource(R.string.map_layer_routes),
-                checked = routesOn,
-                enabled = true,
-                onCheckedChange = onRoutesChange
             )
             LayerRow(
                 icon = Icons.Filled.WbSunny,
