@@ -51,6 +51,7 @@ import com.famtrack.app.data.local.MapLayer
 import com.famtrack.app.data.local.MapLayerPrefs
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.Location as FamLocation
+import com.famtrack.app.data.offline.LiveTrailStore
 import com.famtrack.app.data.model.SosAlert
 import com.famtrack.app.data.remote.FamilyMemberDisplay
 import com.famtrack.app.data.remote.FamilyRepository
@@ -351,7 +352,21 @@ fun HomeScreen(
     // Cada evento é fusionado à lista em memória (uma linha por usuário).
     LaunchedEffect(familyId) {
         val fid = familyId ?: return@LaunchedEffect
+        val ownUid = userId
         locationRepository.observeFamilyLocations(fid).collect { updated ->
+            // TRACK-1a: rastro ao vivo dos membros. O rastro do próprio usuário é
+            // alimentado diretamente pelo FLP no LocationService (evita duplicar
+            // o eco do próprio upsert que volta pelo Realtime).
+            if (updated.user_id != ownUid) {
+                LiveTrailStore.addPoint(
+                    userId = updated.user_id,
+                    latitude = updated.latitude,
+                    longitude = updated.longitude,
+                    recordedAt = updated.lastUpdatedAt ?: System.currentTimeMillis(),
+                    accuracy = updated.accuracy?.toFloat(),
+                    speed = updated.speed?.toFloat()
+                )
+            }
             familyLocations = listOf(updated) +
                 familyLocations.filterNot { it.user_id == updated.user_id }
         }

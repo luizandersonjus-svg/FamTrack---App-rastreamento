@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import com.famtrack.app.data.offline.LiveTrailStore
 
 class FamTrackApp : Application() {
 
@@ -17,6 +18,7 @@ class FamTrackApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
+        LiveTrailStore.initialize(this)
     }
 
     private fun createNotificationChannels() {

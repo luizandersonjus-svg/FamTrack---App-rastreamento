@@ -24,6 +24,7 @@ import com.famtrack.app.MainActivity
 import com.famtrack.app.R
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.observability.Telemetry
+import com.famtrack.app.data.offline.LiveTrailStore
 import com.famtrack.app.data.offline.RouteAnchor
 import com.famtrack.app.data.offline.RoutePointStore
 import com.famtrack.app.data.offline.RouteSyncCoordinator
@@ -357,6 +358,18 @@ result.lastLocation?.let { location ->
                             // try/catch próprio em sua própria coroutine.
                             sendLocationToSupabase(location)
                             saveRoutePoint(location)
+                            // TRACK-1a: alimenta o rastro ao vivo do próprio
+                            // usuário com o mesmo fix do FusedLocationProvider.
+                            currentUserId?.let { uid ->
+                                LiveTrailStore.addPoint(
+                                    userId = uid,
+                                    latitude = location.latitude,
+                                    longitude = location.longitude,
+                                    recordedAt = location.time,
+                                    accuracy = location.accuracy.takeIf { it > 0f },
+                                    speed = if (location.hasSpeed()) location.speed else null
+                                )
+                            }
                             checkGeofences(location)
                             refreshTrackingNotification()
                         }
