@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -76,9 +77,12 @@ fun MapLayerPanel(
     geofencesOn: Boolean,
     eventsOn: Boolean,
     weatherOn: Boolean,
+    trailOn: Boolean,
     onGeofencesChange: (Boolean) -> Unit,
     onEventsChange: (Boolean) -> Unit,
     onWeatherChange: (Boolean) -> Unit,
+    onTrailChange: (Boolean) -> Unit,
+    onClearTrail: () -> Unit,
     onShowLegend: () -> Unit,
     onDismiss: () -> Unit,
     members: List<LayerMember> = emptyList(),
@@ -192,6 +196,21 @@ fun MapLayerPanel(
                 enabled = true,
                 onCheckedChange = onWeatherChange
             )
+            LayerRow(
+                icon = Icons.Filled.Timeline,
+                label = stringResource(R.string.map_layer_trail),
+                checked = trailOn,
+                enabled = true,
+                onCheckedChange = onTrailChange
+            )
+            if (trailOn) {
+                TextButton(
+                    onClick = onClearTrail,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text(stringResource(R.string.map_trail_clear))
+                }
+            }
             if (weatherOn) {
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))

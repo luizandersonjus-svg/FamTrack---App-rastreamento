@@ -52,6 +52,7 @@ import com.famtrack.app.data.local.MapLayerPrefs
 import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.Location as FamLocation
 import com.famtrack.app.data.offline.LiveTrailStore
+import com.famtrack.app.data.offline.TrailPoint
 import com.famtrack.app.data.model.SosAlert
 import com.famtrack.app.data.remote.FamilyMemberDisplay
 import com.famtrack.app.data.remote.FamilyRepository
@@ -102,6 +103,9 @@ private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 private const val LAYER_EVENTS_LIMIT = 20L
+// Cor única temporária do rastro ao vivo (TRACK-1b). Cores estáveis por membro
+// são o TRACK-1c.
+private val LIVE_TRAIL_COLOR = Color(0xFF1E88E5)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,6 +166,13 @@ fun HomeScreen(
     }
     var layerWeather by remember {
         mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.WEATHER))
+    }
+    var layerTrail by remember {
+        mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.TRAIL))
+    }
+    // Rastro ao vivo (TRACK-1b): pontos por membro lidos do LiveTrailStore.
+    var trailPolylines by remember {
+        mutableStateOf<Map<String, List<TrailPoint>>>(emptyMap())
     }
     var showLegend by remember { mutableStateOf(false) }
     var mapBaseType by remember {
@@ -369,6 +380,21 @@ fun HomeScreen(
             }
             familyLocations = listOf(updated) +
                 familyLocations.filterNot { it.user_id == updated.user_id }
+        }
+    }
+
+    // Rastro ao vivo (TRACK-1b): o LiveTrailStore acumula em segundo plano
+    // (LocationService + Realtime); a UI apenas espelha a versão atual do
+    // snapshot a cada 2s, redesenha as polylines quando há pontos novos.
+    LaunchedEffect(Unit) {
+        var seenVersion = -1
+        while (true) {
+            val version = LiveTrailStore.trailVersion
+            if (version != seenVersion) {
+                seenVersion = version
+                trailPolylines = LiveTrailStore.snapshot()
+            }
+            kotlinx.coroutines.delay(2_000L)
         }
     }
 
@@ -1089,6 +1115,30 @@ label = {
                     }
                     PlacesMapOverlay(places)
                 }
+                if (layerTrail) {
+                    // Rastro ao vivo (TRACK-1b): polyline por membro com os pontos já
+                    // filtrados/decimados pelo LiveTrailStore. Cor única
+                    // temporária — cores estáveis por membro são o TRACK-1c.
+                    trailPolylines.forEach { (uid, points) ->
+                        if (points.size >= 2) {
+                            Log.d(
+                                "FamTrackTrailUI",
+                                "desenhando polyline: user=${uid.take(8)} pontos=${points.size}"
+                            )
+                            Polyline(
+                                points = points.map {
+                                    com.google.android.gms.maps.model.LatLng(
+                                        it.latitude,
+                                        it.longitude
+                                    )
+                                },
+                                color = LIVE_TRAIL_COLOR,
+                                width = 8f,
+                                zIndex = 0.4f
+                            )
+                        }
+                    }
+                }
             }
 
             if (layersSheetOpen) {
@@ -1101,6 +1151,7 @@ label = {
                     geofencesOn = layerGeofences,
                     eventsOn = layerEvents,
                     weatherOn = layerWeather,
+                    trailOn = layerTrail,
                     onGeofencesChange = { on ->
                         layerGeofences = on
                         MapLayerPrefs.setOn(context, MapLayer.GEOFENCES, on)
@@ -1113,6 +1164,11 @@ label = {
                         layerWeather = on
                         MapLayerPrefs.setOn(context, MapLayer.WEATHER, on)
                     },
+                    onTrailChange = { on ->
+                        layerTrail = on
+                        MapLayerPrefs.setOn(context, MapLayer.TRAIL, on)
+                    },
+                    onClearTrail = { LiveTrailStore.clearToday() },
                     onShowLegend = { showLegend = !showLegend },
                     onDismiss = { layersSheetOpen = false },
                     members = familyLocations

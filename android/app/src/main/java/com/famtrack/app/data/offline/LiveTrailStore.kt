@@ -76,12 +76,36 @@ internal object LiveTrailStore {
     private var lastPersistMs = 0L
     private val persistInFlight = AtomicBoolean(false)
 
+    // Monotônico: incrementa a cada mudança visível do rastro (ponto aceito,
+    // limpeza ou rollover). A UI consulta [trailVersion] para redesenhar.
+    @Volatile
+    private var version = 0
+
     private val persistScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Chamado no onCreate do Application (single ponto de inicialização). */
     fun initialize(context: Context) {
         if (appContext != null) return
         appContext = context.applicationContext
+    }
+
+    /** Versão atual do rastro em memória; muda quando há conteúdo novo. */
+    val trailVersion: Int
+        get() = version
+
+    /** Apaga o rastro do dia atual (memória + persistência) e retorna. */
+    fun clearToday() {
+        if (appContext == null) return
+        synchronized(lock) {
+            ensureLoadedLocked()
+            val before = trails.values.sumOf { it.size }
+            trails.clear()
+            lastPoint.clear()
+            version++
+            lastPersistMs = 0L
+            Log.i(TAG, "rastro limpo (dia=${currentDay} pontos=$before)")
+            maybePersistLocked()
+        }
     }
 
     /**
@@ -131,6 +155,7 @@ internal object LiveTrailStore {
             }
 
             Log.d(TAG, "ponto aceito: user=$userId total=${list.size} acc=${accuracy ?: "?"}")
+            version++
             maybePersistLocked()
         }
     }
@@ -187,6 +212,7 @@ internal object LiveTrailStore {
         trails.clear()
         lastPoint.clear()
         lastPersistMs = 0L
+        version++
         Log.i(TAG, "rollover de dia: $old -> $newDay (rastro limpo)")
         maybePersistLocked()
     }
