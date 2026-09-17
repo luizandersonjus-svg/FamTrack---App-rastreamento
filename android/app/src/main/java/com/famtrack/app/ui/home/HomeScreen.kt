@@ -103,9 +103,26 @@ private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 private const val LAYER_EVENTS_LIMIT = 20L
-// Cor única temporária do rastro ao vivo (TRACK-1b). Cores estáveis por membro
-// são o TRACK-1c.
-private val LIVE_TRAIL_COLOR = Color(0xFF1E88E5)
+// Paleta estável do rastro ao vivo (TRACK-1c): cada membro recebe uma cor fixa,
+// derivada deterministicamente do userId (estável entre sessões e aparelhos).
+private val TRAIL_PALETTE = listOf(
+    Color(0xFFE53935), // vermelho
+    Color(0xFF1E88E5), // azul
+    Color(0xFF43A047), // verde
+    Color(0xFFFB8C00), // laranja
+    Color(0xFF8E24AA), // roxo
+    Color(0xFF00ACC1), // ciano
+    Color(0xFF3949AB), // indigo
+    Color(0xFFD81B60), // rosa
+    Color(0xFF00897B), // verde-água
+    Color(0xFF6D4C41)  // marrom
+)
+
+/** Cor estável por membro: hash determinístico do userId sobre a paleta. */
+private fun trailColorForMember(userId: String): Color {
+    val idx = Math.floorMod(userId.hashCode(), TRAIL_PALETTE.size)
+    return TRAIL_PALETTE[idx]
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1116,9 +1133,8 @@ label = {
                     PlacesMapOverlay(places)
                 }
                 if (layerTrail) {
-                    // Rastro ao vivo (TRACK-1b): polyline por membro com os pontos já
-                    // filtrados/decimados pelo LiveTrailStore. Cor única
-                    // temporária — cores estáveis por membro são o TRACK-1c.
+                    // Rastro ao vivo (TRACK-1c): polyline por membro com os pontos já
+                    // filtrados/decimados pelo LiveTrailStore e cor estável por membro.
                     trailPolylines.forEach { (uid, points) ->
                         if (points.size >= 2) {
                             Log.d(
@@ -1132,7 +1148,7 @@ label = {
                                         it.longitude
                                     )
                                 },
-                                color = LIVE_TRAIL_COLOR,
+                                color = trailColorForMember(uid),
                                 width = 8f,
                                 zIndex = 0.4f
                             )
