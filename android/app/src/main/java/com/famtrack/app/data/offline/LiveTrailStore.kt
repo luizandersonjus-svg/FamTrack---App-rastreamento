@@ -131,6 +131,13 @@ internal object LiveTrailStore {
             }
 
             val anchor = lastPoint[userId]
+            // Ordem cronológica: ponto mais antigo que o último aceito é eco
+            // atrasado do Realtime ou reordenação da entrega; ligá-lo depois do
+            // último criaria um zigue-zague atravessando o mapa.
+            if (anchor != null && recordedAt < anchor.recordedAt) {
+                Log.d(TAG, "ponto fora de ordem descartado: user=$userId")
+                return
+            }
             if (anchor != null) {
                 val dist = FloatArray(1)
                 Location.distanceBetween(
@@ -160,10 +167,55 @@ internal object LiveTrailStore {
         }
     }
 
-    /** Cópia atual do rastro (dia atual). Usada pelo desenho em TRACK-1b/1c. */
-    fun snapshot(): Map<String, List<TrailPoint>> = synchronized(lock) {
+    /**
+     * Hidratação (TRACK-1d): reconcilia o rastro de um membro com os pontos
+     * vindos do servidor (route_history do dia). O rastro de membros vinha só
+     * do Realtime da tabela `locations` (acumulava apenas com o app aberto);
+     * aqui o dia inteiro é recuperado do servidor, que é alimentado em
+     * background pelo próprio aparelho do membro.
+     *
+     * Regra de segurança: só substitui quando o servidor conhece MAIS pontos
+     * que a memória — assim a hidratação cobre o período com app fechado sem
+     * regredir/apagar o que o Realtime já trouxe. Re-decima do zero para
+     * manter a mesma pipeline de qualidade e o teto por membro.
+     */
+    fun seedMemberTrail(userId: String, points: List<TrailPoint>) {
+        if (appContext == null) return
+        synchronized(lock) {
+            ensureLoadedLocked()
+            if (currentDay != today()) rolloverLocked()
+
+            val valid = points
+                .filter { it.userId == userId && RouteQuality.isAccurate(it.accuracy) }
+                .sortedBy { it.recordedAt }
+            if (valid.isEmpty()) return
+
+            val existing = trails[userId] ?: emptyList()
+            if (valid.size <= existing.size) {
+                Log.d(TAG, "backfill ignorado (memoria>=servidor): user=$userId servidor=${valid.size} memoria=${existing.size}")
+                return
+            }
+
+            val rebuilt = decimate(valid)
+            trails[userId] = rebuilt.toMutableList()
+            lastPoint[userId] = rebuilt.last()
+            Log.i(TAG, "backfill aplicado: user=$userId servidor=${valid.size} memoria=${existing.size} para=${rebuilt.size}")
+            version++
+            maybePersistLocked()
+        }
+    }
+
+    /**
+     * Cópia atual do rastro (dia atual) já em segmentos desenháveis. Os pontos
+     * são ordenados por timestamp e divididos em trechos contínuos: nunca se
+     * desenha uma reta entre dois pontos separados por um salto implausível
+     * (velocidade impossível ou lacuna temporal longa). Usada pelo desenho
+     * (TRACK-1b/1c) e pelo backfill (TRACK-1d).
+     */
+    fun snapshot(): Map<String, List<List<TrailPoint>>> = synchronized(lock) {
         ensureLoadedLocked()
-        trails.mapValues { it.value.toList() }
+        if (currentDay != today()) rolloverLocked()
+        trails.mapValues { (_, points) -> segment(points) }
     }
 
     // ----------------------------------------------------------------------
@@ -171,6 +223,77 @@ internal object LiveTrailStore {
     // ----------------------------------------------------------------------
 
     private fun today(): String = LocalDate.now().toString()
+
+    /**
+     * Ordena os pontos por timestamp e divide em trechos contínuos, quebrando
+     * sempre que o passo entre dois consecutivos for implausível ([isTrailGap]).
+     * Trechos com menos de 2 pontos não são desenháveis e ficam de fora.
+     */
+    private fun segment(points: List<TrailPoint>): List<List<TrailPoint>> {
+        if (points.size < 2) return listOf(points)
+        val sorted = points.sortedBy { it.recordedAt }
+        val segments = mutableListOf<List<TrailPoint>>()
+        var current = mutableListOf<TrailPoint>()
+        for (p in sorted) {
+            val last = current.lastOrNull()
+            if (last != null && isTrailGap(last, p)) {
+                if (current.size >= 2) segments += current
+                current = mutableListOf()
+            }
+            current.add(p)
+        }
+        if (current.size >= 2) segments += current
+        return segments
+    }
+
+    /**
+     * true quando NÃO se deve ligar a -> b: timestamp fora de ordem, velocidade
+     * implícita acima do teto humano/veicular (salto de GPS) ou deslocamento
+     * grande durante uma lacuna temporal longa (coleta cega). A lacuna só
+     * quebra quando é longa E o salto de distância também é grande — assim
+     * paradas reais (gaps de minutos com deriva de poucos metros) mantêm o
+     * traço contínuo, sem fragmentá-lo em dezenas de pedaços.
+     */
+    private fun isTrailGap(a: TrailPoint, b: TrailPoint): Boolean {
+        val dt = b.recordedAt - a.recordedAt
+        if (dt < 0) return true
+        val dist = FloatArray(1)
+        Location.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude, dist)
+        if (dt > RouteQuality.TRAIL_GAP_MAX_DT_MILLIS &&
+            dist[0] > RouteQuality.TRAIL_GAP_MAX_DIST_METERS
+        ) {
+            return true
+        }
+        if (dt < RouteQuality.TRAIL_MIN_DT_FOR_SPEED_MS) return false
+        val kmh = (dist[0] / (dt / 1000.0)) * 3.6
+        return kmh > RouteQuality.TRAIL_MAX_IMPLIED_KMH
+    }
+
+    /**
+     * Re-decimação do zero (usada pelo backfill, TRACK-1d): mantém o primeiro
+     * ponto e só aceita os seguintes a [RouteQuality.TRAIL_MIN_DISTANCE_M] ou
+     * mais do último mantido, aplicando o teto da janela deslizante no fim.
+     */
+    private fun decimate(points: List<TrailPoint>): List<TrailPoint> {
+        val out = mutableListOf<TrailPoint>()
+        for (p in points) {
+            val last = out.lastOrNull()
+            if (last != null) {
+                val dist = FloatArray(1)
+                Location.distanceBetween(
+                    last.latitude,
+                    last.longitude,
+                    p.latitude,
+                    p.longitude,
+                    dist
+                )
+                if (dist[0] < RouteQuality.TRAIL_MIN_DISTANCE_M) continue
+            }
+            out.add(p)
+        }
+        val max = RouteQuality.TRAIL_MAX_POINTS_PER_MEMBER
+        return if (out.size > max) out.drop(out.size - max) else out
+    }
 
     private fun ensureLoadedLocked() {
         if (loaded) return

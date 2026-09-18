@@ -38,6 +38,39 @@ internal object RouteQuality {
     const val TRAIL_MAX_POINTS_PER_MEMBER = 2000
 
     /**
+     * Velocidade implícita máxima (km/h) tolerada entre dois pontos
+     * consecutivos do rastro. Acima disso a linha NÃO é desenhada entre eles
+     * (quebra em segmento), evitando retas que atravessam o mapa em saltos
+     * implausíveis de GPS. Mesmo critério `GAP_MAX_IMPLIED_KMH` do histórico
+     * de rota (CORR-2 / RouteMatchingModels).
+     */
+    const val TRAIL_MAX_IMPLIED_KMH = 180.0
+
+    /**
+     * Intervalo mínimo (ms) entre amostras para aplicar o teste de velocidade
+     * implícita. Abaixo disso o delta de tempo é ruído (dois fixes quase
+     * simultâneos) e a razão distância/tempo explode sem significado.
+     */
+    const val TRAIL_MIN_DT_FOR_SPEED_MS = 1_000L
+
+    /**
+     * Lacuna temporal (ms) a partir da qual se considera que a coleta ficou
+     * cega (app/serviço parado). Só quebra o traço se, ALÉM do tempo, o salto
+     * de distância também for grande (ver [TRAIL_GAP_MAX_DIST_METERS]); assim,
+     * paradas reais (gaps longos com deriva de poucos metros) NÃO fragmentam o
+     * traço — só movimentos feitos durante a cegueira.
+     */
+    const val TRAIL_GAP_MAX_DT_MILLIS = 3 * 60 * 1000L
+
+    /**
+     * Distância (metros) entre dois pontos consecutivos a partir da qual, em
+     * conjunto com [TRAIL_GAP_MAX_DT_MILLIS], o traço é quebrado. Se passou
+     * tempo suficiente E o usuário se deslocou além disso durante a lacuna,
+     * não há como reconstruir o caminho pelas ruas e uma reta cruzaria o mapa.
+     */
+    const val TRAIL_GAP_MAX_DIST_METERS = 500f
+
+    /**
      * true quando o ponto merece entrar no rastro. Precisão desconhecida
      * (null ou <= 0) é aceita, mantendo a convenção do histórico de rota.
      */

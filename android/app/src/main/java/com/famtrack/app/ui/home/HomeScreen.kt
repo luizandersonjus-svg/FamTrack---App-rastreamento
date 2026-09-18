@@ -103,6 +103,15 @@ private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 private const val LAYER_EVENTS_LIMIT = 20L
+// PROBLEMA 2: raio (metros) para agrupar eventos no MESMO local. Vários eventos
+// (CHECKIN/LOW_BATTERY etc.) caem no mesmo ponto; agrupá-los por raio evita que
+// pinos empilhem. Raio maior que a célula da grade (~11 m) para não separar
+// eventos que cruzam a fronteira de um arredondamento.
+private const val EVENT_CLUSTER_RADIUS_M = 60f
+// Backfill do rastro de membros (TRACK-1d): recupera do servidor (route_history)
+// o dia corrente e reconcilia a cada 5 min enquanto a camada estiver ligada.
+private const val TRAIL_BACKFILL_REFRESH_MS = 5 * 60_000L
+private const val TRAIL_BACKFILL_TAG = "FamTrackTrailBackfill"
 // Paleta estável do rastro ao vivo (TRACK-1c): cada membro recebe uma cor fixa,
 // derivada deterministicamente do userId (estável entre sessões e aparelhos).
 private val TRAIL_PALETTE = listOf(
@@ -188,8 +197,10 @@ fun HomeScreen(
         mutableStateOf(MapLayerPrefs.isOn(context, MapLayer.TRAIL))
     }
     // Rastro ao vivo (TRACK-1b): pontos por membro lidos do LiveTrailStore.
+    // Cada membro vira uma lista de SEGMENTOS contínuos (o store quebra em
+    // saltos implausíveis/lacunas, para não desenhar retas cruzando o mapa).
     var trailPolylines by remember {
-        mutableStateOf<Map<String, List<TrailPoint>>>(emptyMap())
+        mutableStateOf<Map<String, List<List<TrailPoint>>>>(emptyMap())
     }
     var showLegend by remember { mutableStateOf(false) }
     var mapBaseType by remember {
@@ -412,6 +423,40 @@ fun HomeScreen(
                 trailPolylines = LiveTrailStore.snapshot()
             }
             kotlinx.coroutines.delay(2_000L)
+        }
+    }
+
+    // Rastro ao vivo (TRACK-1d): backfill do dia a partir do servidor. O rastro
+    // de membros vinha só do Realtime da tabela `locations` (acumulava enquanto
+    // o app observador estava aberto); aqui o dia corrente é hidratado de
+    // route_history — alimentada em background pelo próprio aparelho do membro —
+    // cobrindo o período com o app fechado. Rebusca a cada 5 min enquanto a
+    // camada estiver ligada. O rastro do próprio usuário fica de fora (vem do
+    // FLP local no LocationService, já completo).
+    LaunchedEffect(layerTrail, familyId, memberInfos) {
+        val fid = familyId ?: return@LaunchedEffect
+        if (!layerTrail) return@LaunchedEffect
+        val ownUid = userId
+        while (true) {
+            val zone = java.time.ZoneOffset.systemDefault()
+            val day = java.time.LocalDate.now()
+            val startUtc = day.atStartOfDay(zone).toInstant().toString()
+            val endUtc = day.plusDays(1).atStartOfDay(zone).toInstant().toString()
+            for (mid in memberInfos.keys) {
+                if (mid == ownUid) continue
+                try {
+                    val dayPoints = locationRepository.getRouteHistoryForDay(fid, mid, startUtc, endUtc)
+                    if (dayPoints.isEmpty()) continue
+                    val trail = dayPoints.mapNotNull { p ->
+                        val ts = parseIsoInstantMillis(p.recorded_at) ?: return@mapNotNull null
+                        TrailPoint(mid, p.latitude, p.longitude, ts, p.accuracy, p.speed)
+                    }
+                    LiveTrailStore.seedMemberTrail(mid, trail)
+                } catch (e: Exception) {
+                    Log.w(TRAIL_BACKFILL_TAG, "backfill falhou: user=$mid: ${e.localizedMessage?.take(80)}")
+                }
+            }
+            delay(TRAIL_BACKFILL_REFRESH_MS)
         }
     }
 
@@ -1067,9 +1112,28 @@ label = {
                     )
                 }
                 if (layerEvents) {
-                    familyEvents.forEach { event ->
-                        if (event.lat == 0.0 && event.lng == 0.0) return@forEach
+                    // PROBLEMA 2: vários eventos no MESMO local (ex.: CHECKIN e
+                    // LOW_BATTERY repetidos na mesma casa) empilhavam pinos.
+                    // Agrupa por PROXIMIDADE ([EVENT_CLUSTER_RADIUS_M]) e desenha
+                    // UM marcador por local — o mais recente — indicando quantos
+                    // foram agrupados. familyEvents já vem do mais recente para o
+                    // mais antigo, então o primeiro do grupo é o mais recente.
+                    val clusters = mutableListOf<MutableList<Event>>()
+                    familyEvents
+                        .filter { !(it.lat == 0.0 && it.lng == 0.0) }
+                        .forEach { event ->
+                            val target = clusters.firstOrNull { cluster ->
+                                val head = cluster.first()
+                                distanceMeters(head.lat, head.lng, event.lat, event.lng) <=
+                                    EVENT_CLUSTER_RADIUS_M
+                            }
+                            if (target != null) target.add(event)
+                            else clusters.add(mutableListOf(event))
+                        }
+                    clusters.forEach { group ->
+                        val event = group.first()
                         val memberName = memberInfos[event.member_id]?.display_name ?: "Membro"
+                        val suffix = if (group.size > 1) " (+${group.size - 1})" else ""
                         Marker(
                             state = MarkerState(
                                 position = com.google.android.gms.maps.model.LatLng(
@@ -1077,7 +1141,7 @@ label = {
                                     event.lng
                                 )
                             ),
-                            title = "$memberName \u2014 ${eventShortLabel(event.type, context)}",
+                            title = "$memberName \u2014 ${eventShortLabel(event.type, context)}$suffix",
                             icon = com.google.android.gms.maps.model.BitmapDescriptorFactory
                                 .defaultMarker(eventHue(event.type)),
                             zIndex = 0.5f
@@ -1135,23 +1199,27 @@ label = {
                 if (layerTrail) {
                     // Rastro ao vivo (TRACK-1c): polyline por membro com os pontos já
                     // filtrados/decimados pelo LiveTrailStore e cor estável por membro.
-                    trailPolylines.forEach { (uid, points) ->
-                        if (points.size >= 2) {
+                    trailPolylines.forEach { (uid, segments) ->
+                        val drawable = segments.filter { it.size >= 2 }
+                        if (drawable.isNotEmpty()) {
                             Log.d(
                                 "FamTrackTrailUI",
-                                "desenhando polyline: user=${uid.take(8)} pontos=${points.size}"
+                                "desenhando polyline: user=${uid.take(8)} " +
+                                    "segmentos=${drawable.size} pontos=${drawable.sumOf { it.size }}"
                             )
-                            Polyline(
-                                points = points.map {
-                                    com.google.android.gms.maps.model.LatLng(
-                                        it.latitude,
-                                        it.longitude
-                                    )
-                                },
-                                color = trailColorForMember(uid),
-                                width = 8f,
-                                zIndex = 0.4f
-                            )
+                            drawable.forEach { seg ->
+                                Polyline(
+                                    points = seg.map {
+                                        com.google.android.gms.maps.model.LatLng(
+                                            it.latitude,
+                                            it.longitude
+                                        )
+                                    },
+                                    color = trailColorForMember(uid),
+                                    width = 8f,
+                                    zIndex = 0.4f
+                                )
+                            }
                         }
                     }
                 }
@@ -1736,6 +1804,14 @@ label = {
 private fun formatSosTime(iso: String?): String? {
     val millis = parseIsoInstantMillis(iso) ?: return null
     return java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date(millis))
+}
+
+// Distância aproximada (metros) entre dois pontos por equiretangular — precisão
+// suficiente para o agrupamento de eventos no mapa (raio de dezenas de metros).
+private fun distanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val dLat = (lat2 - lat1) * 111_000.0
+    val dLon = (lon2 - lon1) * 111_000.0 * Math.cos(Math.toRadians(lat1))
+    return Math.sqrt(dLat * dLat + dLon * dLon)
 }
 
 // ETAPA 10D-2 — cores e rótulos curtos dos eventos na camada de Eventos.
