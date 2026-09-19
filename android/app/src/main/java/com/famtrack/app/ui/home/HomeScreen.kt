@@ -396,6 +396,9 @@ fun HomeScreen(
             // TRACK-1a: rastro ao vivo dos membros. O rastro do próprio usuário é
             // alimentado diretamente pelo FLP no LocationService (evita duplicar
             // o eco do próprio upsert que volta pelo Realtime).
+// TRACK-1a: rastro ao vivo dos membros. O rastro do próprio usuário é
+            // alimentado diretamente pelo FLP no LocationService (evita duplicar
+            // o eco do próprio upsert que volta pelo Realtime).
             if (updated.user_id != ownUid) {
                 LiveTrailStore.addPoint(
                     userId = updated.user_id,

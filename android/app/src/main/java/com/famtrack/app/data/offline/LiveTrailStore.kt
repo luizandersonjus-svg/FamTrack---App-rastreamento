@@ -59,6 +59,9 @@ internal data class TrailPoint(
  */
 internal object LiveTrailStore {
 
+    /** Estado de movimento do membro (máquina de estados por usuário). */
+    private enum class MotionState { STATIONARY, MOVING }
+
     private val lock = Any()
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -70,6 +73,23 @@ internal object LiveTrailStore {
 
     // user_id -> último ponto aceito (âncora da decimação por distância).
     private val lastPoint = mutableMapOf<String, TrailPoint>()
+
+    // Máquina de estados de movimento (CORR-X): user_id -> estado atual.
+    private val motionStates = mutableMapOf<String, MotionState>()
+
+    // user_id -> ponto-âncora (último local estável; de onde partiu o trecho
+    // atual). Fica congelado enquanto STATIONARY e NÃO segue o tremor de GPS.
+    private val anchors = mutableMapOf<String, TrailPoint>()
+
+    // user_id -> instante (wall clock) em que o membro foi CONFIRMADO parado
+    // (2 min dentro do raio). Base do auto-hide de 5 min.
+    private val stationarySinceWall = mutableMapOf<String, Long>()
+
+    // user_id -> ponto que iniciou a janela de confirmação MOVING -> STATIONARY.
+    private val stationaryCandidatePoint = mutableMapOf<String, TrailPoint>()
+
+    // user_id -> instante (wall clock) de início da janela de confirmação.
+    private val stationaryCandidateStart = mutableMapOf<String, Long>()
 
     private var currentDay: String? = null
     private var loaded = false
@@ -101,6 +121,7 @@ internal object LiveTrailStore {
             val before = trails.values.sumOf { it.size }
             trails.clear()
             lastPoint.clear()
+            resetMotionLocked()
             version++
             lastPersistMs = 0L
             Log.i(TAG, "rastro limpo (dia=${currentDay} pontos=$before)")
@@ -125,43 +146,88 @@ internal object LiveTrailStore {
             ensureLoadedLocked()
             if (currentDay != today()) rolloverLocked()
 
+            // Ocultação por tempo de parede: corre a cada fix (não só no
+            // snapshot, que a UI só consulta quando a versão muda). Sem um fix
+            // novo o cronômetro sozinho não dispararia o redesenho.
+            autoHideSweepLocked()
+
             if (!RouteQuality.isAccurate(accuracy)) {
                 Log.d(TAG, "ponto descartado por precisão: user=$userId accuracy=${accuracy ?: "?"}")
                 return
             }
 
-            val anchor = lastPoint[userId]
+            val last = lastPoint[userId]
             // Ordem cronológica: ponto mais antigo que o último aceito é eco
             // atrasado do Realtime ou reordenação da entrega; ligá-lo depois do
             // último criaria um zigue-zague atravessando o mapa.
-            if (anchor != null && recordedAt < anchor.recordedAt) {
+            if (last != null && recordedAt < last.recordedAt) {
                 Log.d(TAG, "ponto fora de ordem descartado: user=$userId")
                 return
             }
-            if (anchor != null) {
-                val dist = FloatArray(1)
-                Location.distanceBetween(
-                    anchor.latitude,
-                    anchor.longitude,
-                    latitude,
-                    longitude,
-                    dist
+
+            val now = System.currentTimeMillis()
+
+            // ------------------------------------------------------------------
+            // Máquina de estados (CORR-X): enquanto STATIONARY o rastro não
+            // acumula NADA — o tremor de GPS de quem está parado é descartado.
+            // Só ao cruzar [TRAIL_MOVEMENT_START_THRESHOLD_M] de deslocamento em
+            // relação ao ponto-âncora o membro é considerado em movimento e o
+            // trecho começa a ser desenhado a partir da própria âncora.
+            // ------------------------------------------------------------------
+            val state = motionStates[userId] ?: MotionState.STATIONARY
+            if (state == MotionState.STATIONARY) {
+                val anchor = anchors[userId] ?: last
+                if (anchor == null) {
+                    // Primeiro contato do membro: o fix vira o ponto-âncora, mas
+                    // não entra no rastro (pode ser o tremor do local de parada).
+                    val first = TrailPoint(userId, latitude, longitude, recordedAt, accuracy, speed)
+                    anchors[userId] = first
+                    lastPoint[userId] = first
+                    Log.i(TAG, "âncora inicial (aguardando movimento): user=$userId")
+                    return
+                }
+                val dist = distanceMetersLocked(anchor.latitude, anchor.longitude, latitude, longitude)
+                if (dist < RouteQuality.TRAIL_MOVEMENT_START_THRESHOLD_M) {
+                    Log.d(TAG, "parado sem movimento (tremor): user=$userId dist=${"%.1f".format(dist)}m")
+                    return
+                }
+                // Começou a se mover: transiciona e acumula partindo da âncora
+                // (o novo trecho COMEÇA no local estável — sem buraco visual).
+                motionStates[userId] = MotionState.MOVING
+                // Cancela o cronômetro do auto-hide anterior: a contagem de
+                // "5 min parado" só vale para o STATIONARY recém-confirmado.
+                stationarySinceWall.remove(userId)
+                stationaryCandidatePoint.remove(userId)
+                stationaryCandidateStart.remove(userId)
+                if (trails[userId].isNullOrEmpty()) {
+                    // Trecho novo do zero: a âncora é o primeiro ponto.
+                    appendPointRawLocked(anchor)
+                }
+                appendPointRawLocked(
+                    TrailPoint(userId, latitude, longitude, recordedAt, accuracy, speed)
                 )
-                if (dist[0] < RouteQuality.TRAIL_MIN_DISTANCE_M) {
+                Log.i(TAG, "movimento iniciado: user=$userId")
+                version++
+                maybePersistLocked()
+                return
+            }
+
+            // ------------------------------------------------------------------
+            // MOVING: pelo o  pipeline de qualidade original + confirmação de
+            // parada (ficou dentro do raio por tempo suficiente -> STATIONARY).
+            // ------------------------------------------------------------------
+            if (last != null) {
+                val dist = distanceMetersLocked(last.latitude, last.longitude, latitude, longitude)
+                if (dist < RouteQuality.TRAIL_MIN_DISTANCE_M) {
                     Log.d(TAG, "ponto ignorado (parado/duplicado): user=$userId")
                     return
                 }
             }
 
-            val list = trails.getOrPut(userId) { mutableListOf() }
             val point = TrailPoint(userId, latitude, longitude, recordedAt, accuracy, speed)
-            list.add(point)
-            lastPoint[userId] = point
-            if (list.size > RouteQuality.TRAIL_MAX_POINTS_PER_MEMBER) {
-                list.removeAt(0)
-            }
+            appendPointRawLocked(point)
+            confirmStopLocked(userId, point, now)
 
-            Log.d(TAG, "ponto aceito: user=$userId total=${list.size} acc=${accuracy ?: "?"}")
             version++
             maybePersistLocked()
         }
@@ -196,10 +262,37 @@ internal object LiveTrailStore {
                 return
             }
 
-            val rebuilt = decimate(valid)
+            // O histórico do servidor (dia inteiro) passa PELA MESMA máquina de
+            // estados de movimento do Realtime: tremor de quem ficou parado não
+            // vira trecho, e trechos concluídos (5 min parado) ficam ocultos.
+            val gate = applyMovementGateLocked(valid)
+            val rebuilt = decimate(gate.kept)
             trails[userId] = rebuilt.toMutableList()
-            lastPoint[userId] = rebuilt.last()
-            Log.i(TAG, "backfill aplicado: user=$userId servidor=${valid.size} memoria=${existing.size} para=${rebuilt.size}")
+            if (rebuilt.isNotEmpty()) {
+                lastPoint[userId] = rebuilt.last()
+            }
+            // Reflete o estado final do replay na máquina em tempo real.
+            val anchorFinal = (if (gate.state == MotionState.MOVING) rebuilt.lastOrNull() else gate.anchor)
+                ?: rebuilt.lastOrNull()
+                ?: lastPoint[userId]
+            if (gate.state == MotionState.MOVING) {
+                motionStates[userId] = MotionState.MOVING
+                stationaryCandidatePoint.remove(userId)
+                stationaryCandidateStart.remove(userId)
+                anchorFinal?.let { anchors[userId] = it }
+            } else {
+                motionStates[userId] = MotionState.STATIONARY
+                anchorFinal?.let { anchors[userId] = it }
+                // Daqui em diante vale o auto-hide real (5 min por parede):
+                // os fixes novos confirmam a parada enquanto ela durar.
+                stationarySinceWall[userId] = System.currentTimeMillis()
+                stationaryCandidatePoint.remove(userId)
+                stationaryCandidateStart.remove(userId)
+            }
+            Log.i(
+                TAG,
+                "backfill aplicado: user=$userId servidor=${valid.size} memoria=${existing.size} para=${rebuilt.size} estado=${gate.state}"
+            )
             version++
             maybePersistLocked()
         }
@@ -215,6 +308,9 @@ internal object LiveTrailStore {
     fun snapshot(): Map<String, List<List<TrailPoint>>> = synchronized(lock) {
         ensureLoadedLocked()
         if (currentDay != today()) rolloverLocked()
+        // Ocultação por tempo decorrido precisa rodar também no redraw: o
+        // cronômetro do auto-hide pode vencer sem que um novo fix chegue.
+        autoHideSweepLocked()
         trails.mapValues { (_, points) -> segment(points) }
     }
 
@@ -223,6 +319,175 @@ internal object LiveTrailStore {
     // ----------------------------------------------------------------------
 
     private fun today(): String = LocalDate.now().toString()
+
+    /** Anexa o ponto à lista do membro (janela deslizante até o teto). */
+    private fun appendPointRawLocked(point: TrailPoint) {
+        val list = trails.getOrPut(point.userId) { mutableListOf() }
+        list.add(point)
+        lastPoint[point.userId] = point
+        if (list.size > RouteQuality.TRAIL_MAX_POINTS_PER_MEMBER) {
+            list.removeAt(0)
+        }
+        Log.d(TAG, "ponto aceito: user=${point.userId} total=${list.size} acc=${point.accuracy ?: "?"}")
+    }
+
+    /**
+     * Janela de confirmação MOVING -> STATIONARY (CORR-X): enquanto MOVING, se
+     * os fixes permanecerem dentro de [RouteQuality.TRAIL_STATIONARY_CONFIRM_RADIUS_M]
+     * do ponto que iniciou a janela por [RouteQuality.TRAIL_STATIONARY_CONFIRM_DURATION_MS],
+     * o membro é confirmado parado e a âncora passa a ser o local de parada.
+     * Se um fix sai do raio, a janela reinicia daquele ponto — ainda se move.
+     * Mede em relação ao 1º fix da janela (não ao mais recente) para que uma
+     * caminhada lenta com passos curtos não seja interpretada como parada.
+     */
+    private fun confirmStopLocked(userId: String, point: TrailPoint, now: Long) {
+        val first = stationaryCandidatePoint[userId]
+        if (first == null) {
+            stationaryCandidatePoint[userId] = point
+            stationaryCandidateStart[userId] = now
+            return
+        }
+        val dist = distanceMetersLocked(first, point)
+        if (dist > RouteQuality.TRAIL_STATIONARY_CONFIRM_RADIUS_M) {
+            stationaryCandidatePoint[userId] = point
+            stationaryCandidateStart[userId] = now
+            return
+        }
+        val since = stationaryCandidateStart[userId] ?: now
+        if (now - since < RouteQuality.TRAIL_STATIONARY_CONFIRM_DURATION_MS) return
+        motionStates[userId] = MotionState.STATIONARY
+        anchors[userId] = lastPoint[userId] ?: point
+        stationarySinceWall[userId] = now
+        stationaryCandidatePoint.remove(userId)
+        stationaryCandidateStart.remove(userId)
+        Log.i(
+            TAG,
+            "parada confirmada (${RouteQuality.TRAIL_STATIONARY_CONFIRM_DURATION_MS / 1000}s sem deslocamento): user=$userId"
+        )
+    }
+
+    /**
+     * Ocultação automática do trecho concluído (CORR-X): após o membro ser
+     * confirmado parado e permanecer [RouteQuality.TRAIL_AUTO_HIDE_AFTER_STATIONARY_MS]
+     * sem se mover, o trecho que ele acabou de desenhar SOME do mapa. A âncora
+     * permanece: um movimento futuro parte dela e monta um trecho novo do zero.
+     * Roda no addPoint (via confirmação) e no snapshot (por tempo de parede).
+     */
+    private fun autoHideSweepLocked() {
+        val now = System.currentTimeMillis()
+        for ((uid, since) in stationarySinceWall.toList()) {
+            if (now - since < RouteQuality.TRAIL_AUTO_HIDE_AFTER_STATIONARY_MS) continue
+            stationarySinceWall.remove(uid)
+            val list = trails.remove(uid)
+            if (list.isNullOrEmpty()) continue
+            lastPoint.remove(uid)
+            version++
+            maybePersistLocked()
+            Log.i(TAG, "trecho oculto (5 min parado): user=$uid pontos=${list.size}")
+        }
+    }
+
+    /** Redefine toda a máquina de estados de movimento (rollover/limpeza). */
+    private fun resetMotionLocked() {
+        motionStates.clear()
+        anchors.clear()
+        stationarySinceWall.clear()
+        stationaryCandidatePoint.clear()
+        stationaryCandidateStart.clear()
+    }
+
+    /** Resultado do replay da máquina de estados sobre pontos históricos. */
+    private data class MovementGateResult(
+        val kept: List<TrailPoint>,
+        val state: MotionState,
+        val anchor: TrailPoint?
+    )
+
+    /**
+     * Replay da máquina de estados de movimento (CORR-X) sobre uma sequência
+     * ORDENADA por [TrailPoint.recordedAt] (histórico do servidor, dia inteiro).
+     * Tem as mesmas regras do Realtime [addPoint]:
+     *  - STATIONARY: descarta pontos dentro de [RouteQuality.TRAIL_MOVEMENT_START_THRESHOLD_M]
+     *    da âncora (tremor de quem está parado não vira trecho);
+     *  - ao cruzar o limiar, MOVING e o trecho passa a acumular partindo da âncora;
+     *  - MOVING confirma parada se permanecer dentro do raio por
+     *    [RouteQuality.TRAIL_STATIONARY_CONFIRM_DURATION_MS] e, após
+     *    [RouteQuality.TRAIL_AUTO_HIDE_AFTER_STATIONARY_MS] parado, o trecho
+     *    concluído é descartado (queda de um dia com volta para casa não deixa
+     *    lixo na casa).
+     */
+    private fun applyMovementGateLocked(points: List<TrailPoint>): MovementGateResult {
+        val sorted = points.sortedBy { it.recordedAt }
+        val kept = mutableListOf<TrailPoint>()
+        var state = MotionState.STATIONARY
+        var anchor: TrailPoint? = null
+        var stopSince: Long? = null
+        var movingAnchor: TrailPoint? = null
+        var movingSince = 0L
+
+        for (p in sorted) {
+            if (state == MotionState.STATIONARY) {
+                if (anchor == null) {
+                    anchor = p
+                    continue
+                }
+                // Auto-hide: já está parado há 5 min? O trecho anterior, se
+                // houver, era de uma movimentação que terminou — some do mapa.
+                val stop = stopSince
+                if (stop != null && p.recordedAt - stop >= RouteQuality.TRAIL_AUTO_HIDE_AFTER_STATIONARY_MS) {
+                    kept.clear()
+                    stopSince = null
+                }
+                val d = distanceMetersLocked(anchor, p)
+                if (d < RouteQuality.TRAIL_MOVEMENT_START_THRESHOLD_M) continue
+                // Partiu de verdade: novo trecho começa na âncora.
+                state = MotionState.MOVING
+                stopSince = null
+                if (kept.isEmpty()) kept += anchor
+                kept += p
+                movingAnchor = p
+                movingSince = p.recordedAt
+            } else {
+                // MOVING: janela de confirmação de parada em relação ao 1º fix.
+                val first = movingAnchor
+                if (first != null) {
+                    val dCand = distanceMetersLocked(first, p)
+                    if (dCand <= RouteQuality.TRAIL_STATIONARY_CONFIRM_RADIUS_M) {
+                        if (p.recordedAt - movingSince >= RouteQuality.TRAIL_STATIONARY_CONFIRM_DURATION_MS) {
+                            // Parou: âncora passa a ser o local de parada.
+                            state = MotionState.STATIONARY
+                            anchor = p
+                            stopSince = p.recordedAt
+                            kept += p
+                            continue
+                        }
+                        kept += p
+                        continue
+                    }
+                }
+                kept += p
+                movingAnchor = p
+                movingSince = p.recordedAt
+            }
+        }
+
+        val lastKept = kept.lastOrNull()
+        if (state == MotionState.STATIONARY && anchor == null) {
+            anchor = lastKept
+        }
+        return MovementGateResult(kept, state, anchor)
+    }
+
+    /** Distância em metros (haversine via Location). */
+    private fun distanceMetersLocked(a: TrailPoint, b: TrailPoint): Float {
+        return distanceMetersLocked(a.latitude, a.longitude, b.latitude, b.longitude)
+    }
+
+    private fun distanceMetersLocked(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+        val dist = FloatArray(1)
+        Location.distanceBetween(lat1, lon1, lat2, lon2, dist)
+        return dist[0]
+    }
 
     /**
      * Ordena os pontos por timestamp e divide em trechos contínuos, quebrando
@@ -314,8 +579,25 @@ internal object LiveTrailStore {
                         list.removeAt(0)
                     }
                 }
-                for ((uid, list) in trails) {
-                    lastPoint[uid] = list.last()
+                val restoredAt = System.currentTimeMillis()
+                for ((uid, list) in trails.toMap()) {
+                    val lastPt = list.lastOrNull() ?: continue
+                    lastPoint[uid] = lastPt
+                    // Ao restaurar, o membro começa STATIONARY ancorado no
+                    // último ponto: fixes de tremor não reacumulam rastro.
+                    anchors[uid] = lastPt
+                    motionStates[uid] = MotionState.STATIONARY
+                    val ageMs = restoredAt - lastPt.recordedAt
+                    if (ageMs >= RouteQuality.TRAIL_AUTO_HIDE_AFTER_STATIONARY_MS) {
+                        // Sessão anterior: movimentação antiga que terminou há
+                        // muito tempo. Trecho concluído já deve estar oculto.
+                        trails.remove(uid)
+                        Log.i(TAG, "trecho de sessão anterior ocultado (parado): user=$uid")
+                    } else {
+                        // Parou há pouco (ou ainda movendo): inicia a contagem
+                        // do auto-hide; o próximo fix em movimento a cancela.
+                        stationarySinceWall[uid] = restoredAt
+                    }
                 }
                 Log.i(TAG, "rastro restaurado: dia=$day pontos=${points.size} membros=${trails.size}")
             } catch (e: Exception) {
@@ -334,6 +616,7 @@ internal object LiveTrailStore {
         currentDay = newDay
         trails.clear()
         lastPoint.clear()
+        resetMotionLocked()
         lastPersistMs = 0L
         version++
         Log.i(TAG, "rollover de dia: $old -> $newDay (rastro limpo)")

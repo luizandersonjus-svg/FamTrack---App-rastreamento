@@ -70,6 +70,51 @@ internal object RouteQuality {
      */
     const val TRAIL_GAP_MAX_DIST_METERS = 500f
 
+    // ----------------------------------------------------------------------
+    // Detecção de movimento (TRACK-1, CORR-X): máquina de estados por membro.
+    // O rastro só é desenhado quando há MOVIMENTO de verdade; tremor de GPS
+    // de pessoa parada não entra no store (resolve o emaranhado de linhas no
+    // mapa quando o usuário está parado em casa, sem sair).
+    // ----------------------------------------------------------------------
+
+    /**
+     * Distância acumulada (metros) em relação ao ponto-âncora (o último local
+     * estável onde a pessoa estava parada) para considerar que o movimento
+     * COMEÇOU. Enquanto STATIONARY, cada fix é comparado com a âncora; só ao
+     * cruzar este limiar o rastro passa a ser acumulado (a âncora vira o
+     * primeiro ponto do traço, sem "buraco" visual no início do trecho).
+     * Tremor de GPS parado fica muito abaixo disso; uma saída real a pé ou de
+     * carro cruza 30 m rápido. 30 m ≈ meia quadra.
+     */
+    const val TRAIL_MOVEMENT_START_THRESHOLD_M = 30f
+
+    /**
+     * Raio (metros) usado para CONFIRMAR que a pessoa parou de se mover.
+     * Enquanto MOVING, se os fixes permanecerem dentro deste raio do último
+     * ponto aceito por [TRAIL_STATIONARY_CONFIRM_DURATION_MS], transitamos
+     * para STATIONARY (a pessoa parou de verdade; tremor pós-parada fica bem
+     * abaixo de 30 m). Mesmo valor do limiar de início de movimento para que
+     * mover 30 m e parar 30 m sejam simétricos.
+     */
+    const val TRAIL_STATIONARY_CONFIRM_RADIUS_M = 30f
+
+    /**
+     * Duração (ms) que os fixes precisam ficar dentro de
+     * [TRAIL_STATIONARY_CONFIRM_RADIUS_M] para transicionar MOVING ->
+     * STATIONARY. 120 s (2 min) de intervalo sem deslocamento líquido
+     * significativo = parou de verdade; uma pausa breve no trânsito não
+     * destrói o traço (só reconfirma ao sair).
+     */
+    const val TRAIL_STATIONARY_CONFIRM_DURATION_MS = 120_000L
+
+    /**
+     * Tempo (ms) que o membro deve permanecer STATIONARY após ser confirmado
+     * parado para que o rastro do trecho concluído seja OCULTADO do mapa.
+     * 5 min parado = o deslocamento acabou; qualquer movimento futuro parte
+     * de um novo ponto-âncora e monta um traço novo do zero.
+     */
+    const val TRAIL_AUTO_HIDE_AFTER_STATIONARY_MS = 5 * 60_000L
+
     /**
      * true quando o ponto merece entrar no rastro. Precisão desconhecida
      * (null ou <= 0) é aceita, mantendo a convenção do histórico de rota.
