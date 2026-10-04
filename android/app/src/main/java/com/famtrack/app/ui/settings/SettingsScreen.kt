@@ -34,6 +34,7 @@ import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.HealthConnectRepository
 import com.famtrack.app.data.remote.HeartRateSummary
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.data.session.SessionCleanup
 import com.famtrack.app.feature.healthsnap.HealthSnapRepository
 import com.famtrack.app.feature.privacy.PrivacyPrefs
 import com.famtrack.app.feature.privacy.PrivacyRepository
@@ -127,7 +128,7 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     showLogoutDialog = false
                     scope.launch {
-                        SupabaseClient.getInstance().auth.signOut()
+                        SessionCleanup.signOut(context)
                         onLogout()
                     }
                 }) {

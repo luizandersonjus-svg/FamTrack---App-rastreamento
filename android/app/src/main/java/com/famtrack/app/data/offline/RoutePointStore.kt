@@ -242,6 +242,21 @@ internal class RoutePointStore(private val context: Context) {
     }
 
     /**
+     * Logout: apaga fila, quarentena e âncora. Pontos ainda não sincronizados
+     * são descartados para não vazar o trajeto para a próxima conta do aparelho.
+     */
+    fun clearAll() {
+        ensureReady()
+        synchronized(lock) {
+            dao.clear()
+            prefs.edit()
+                .remove(KEY_QUARANTINE)
+                .remove(KEY_ANCHOR)
+                .commit()
+        }
+    }
+
+    /**
      * Trunca a fila de forma determinística ao atingir o limite: preserva o
      * PRIMEIRO e o ÚLTIMO ponto (extremos da janela) e os pontos mais recentes
      * restantes; descarta intermediários na mesma ordem da coleta. Nunca limpa

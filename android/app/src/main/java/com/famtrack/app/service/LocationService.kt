@@ -1142,6 +1142,18 @@ result.lastLocation?.let { location ->
             context.startService(intent)
         }
 
+        /**
+         * Logout: esquece as ids persistidas para que boot, watchdog e
+         * MainActivity.onResume não religuem o tracking da conta anterior.
+         */
+        fun clearPersistedIds(context: Context) {
+            context.getSharedPreferences(SERVICE_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_FAMILY_ID)
+                .remove(KEY_USER_ID)
+                .commit()
+        }
+
         /** Últimas ids persistidas (sobrevivem a reboot/matança do processo). */
         fun lastPersistedIds(context: Context): Pair<String, String>? {
             val prefs = context.getSharedPreferences(SERVICE_PREFS, Context.MODE_PRIVATE)

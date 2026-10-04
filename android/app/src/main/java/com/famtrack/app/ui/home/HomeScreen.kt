@@ -61,6 +61,7 @@ import com.famtrack.app.data.remote.LocationRepository
 import com.famtrack.app.data.remote.NotificationRepository
 import com.famtrack.app.data.remote.SosRepository
 import com.famtrack.app.data.remote.SupabaseClient
+import com.famtrack.app.data.session.SessionCleanup
 import com.famtrack.app.feature.activity.ActivityRepository
 import com.famtrack.app.feature.activity.Event
 import com.famtrack.app.feature.memberdetail.MemberCard
@@ -262,6 +263,35 @@ fun HomeScreen(
 
     val cameraPositionState = rememberCameraPositionState()
 
+    // Callback do FLP da própria tela. Antes nunca era removido: cada entrada
+    // na Home registrava mais um (alta precisão, 3s), que seguia vivo em
+    // background — e após o logout — enquanto o processo existisse.
+    var uiLocationCallback by remember { mutableStateOf<LocationCallback?>(null) }
+    DisposableEffect(Unit) {
+        onDispose {
+            uiLocationCallback?.let {
+                LocationServices.getFusedLocationProviderClient(context).removeLocationUpdates(it)
+            }
+            uiLocationCallback = null
+        }
+    }
+    val startUiLocationUpdates: () -> Unit = {
+        uiLocationCallback?.let {
+            LocationServices.getFusedLocationProviderClient(context).removeLocationUpdates(it)
+        }
+        uiLocationCallback = startLocationUpdates(context) { location ->
+            val fix = SosFix(
+                latitude = location.latitude,
+                longitude = location.longitude,
+                accuracy = location.accuracy.takeIf { it > 0f }?.toDouble(),
+                fixAtMillis = location.time
+            )
+            currentLocation = Pair(fix.latitude, fix.longitude)
+            currentFix = fix
+            LocationFixStore.save(context, fix)
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -269,17 +299,7 @@ fun HomeScreen(
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         hasLocationPermission = fineGranted || coarseGranted
         if (hasLocationPermission) {
-            startLocationUpdates(context) { location ->
-                val fix = SosFix(
-                    latitude = location.latitude,
-                    longitude = location.longitude,
-                    accuracy = location.accuracy.takeIf { it > 0f }?.toDouble(),
-                    fixAtMillis = location.time
-                )
-                currentLocation = Pair(fix.latitude, fix.longitude)
-                currentFix = fix
-                LocationFixStore.save(context, fix)
-            }
+            startUiLocationUpdates()
             startSharingService(context, userId, familyId)
         }
     }
@@ -293,17 +313,7 @@ fun HomeScreen(
                 )
             )
         } else {
-            startLocationUpdates(context) { location ->
-                val fix = SosFix(
-                    latitude = location.latitude,
-                    longitude = location.longitude,
-                    accuracy = location.accuracy.takeIf { it > 0f }?.toDouble(),
-                    fixAtMillis = location.time
-                )
-                currentLocation = Pair(fix.latitude, fix.longitude)
-                currentFix = fix
-                LocationFixStore.save(context, fix)
-            }
+            startUiLocationUpdates()
         }
 
         try {
@@ -1022,8 +1032,13 @@ label = {
                     confirmButton = {
                         TextButton(onClick = {
                             showLogoutDialog = false
+                            uiLocationCallback?.let {
+                                LocationServices.getFusedLocationProviderClient(context)
+                                    .removeLocationUpdates(it)
+                            }
+                            uiLocationCallback = null
                             scope.launch {
-                                SupabaseClient.getInstance().auth.signOut()
+                                SessionCleanup.signOut(context)
                                 onLogout()
                             }
                         }) {
@@ -1862,10 +1877,11 @@ private fun startSharingService(
     }
 }
 
+/** Registra o FLP da tela; devolve o callback para ser removido no dispose. */
 private fun startLocationUpdates(
     context: Context,
     onLocationReceived: (Location) -> Unit
-) {
+): LocationCallback? {
     val locationClient = LocationServices.getFusedLocationProviderClient(context)
 
     val locationRequest = LocationRequest.Builder(
@@ -1895,7 +1911,9 @@ private fun startLocationUpdates(
             locationCallback,
             Looper.getMainLooper()
         )
+        return locationCallback
     }
+    return null
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
