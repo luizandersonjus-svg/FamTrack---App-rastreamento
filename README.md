@@ -24,7 +24,11 @@ App Android nativo para rastreamento de localização familiar em tempo real.
 
 1. Crie uma conta em [supabase.com](https://supabase.com)
 2. Crie um novo projeto
-3. Execute o SQL em `sql/01_schema.sql` no SQL Editor
+3. Execute no SQL Editor, nesta ordem: `setup_supabase.sql`, `02_migracao_correcoes.sql`,
+   `fix_rls_recursion.sql`, `03_feature_migracao.sql`, `04_route_history.sql`,
+   `05_places_types.sql`, `06_sos_correcoes.sql`, `07_locations_upsert.sql`,
+   `08_telemetry.sql`, `09_notifications_delete.sql` e `10_security_hardening.sql`
+   (em um banco já existente, basta rodar o `10_security_hardening.sql`)
 4. Copie a URL e a anon key
 
 ### 2. Configure o Google Cloud

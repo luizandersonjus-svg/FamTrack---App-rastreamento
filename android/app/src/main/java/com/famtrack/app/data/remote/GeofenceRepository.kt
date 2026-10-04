@@ -2,6 +2,8 @@ package com.famtrack.app.data.remote
 
 import com.famtrack.app.data.model.Geofence
 import io.github.jan.supabase.postgrest.from
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class GeofenceRepository {
 
@@ -27,15 +29,17 @@ class GeofenceRepository {
 
     // Atualizar geofence
     suspend fun updateGeofence(geofence: Geofence) {
-        val payload = mutableMapOf<String, Any?>(
-            "name" to geofence.name,
-            "center_lat" to geofence.center_lat,
-            "center_lon" to geofence.center_lon,
-            "radius_meters" to geofence.radius_meters,
-            "color" to geofence.color,
-            "active" to geofence.active
-        )
-        geofence.placeId?.let { payload["place_id"] = it }
+        // JsonObject explícito: Map<String, Any?> não é serializável pelo
+        // kotlinx.serialization e fazia o update falhar em tempo de execução.
+        val payload = buildJsonObject {
+            put("name", geofence.name)
+            put("center_lat", geofence.center_lat)
+            put("center_lon", geofence.center_lon)
+            put("radius_meters", geofence.radius_meters)
+            put("color", geofence.color)
+            put("active", geofence.active)
+            geofence.placeId?.let { put("place_id", it) }
+        }
         client.from("geofences")
             .update(payload) {
                 filter {

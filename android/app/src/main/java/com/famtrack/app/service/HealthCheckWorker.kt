@@ -99,6 +99,10 @@ class HealthCheckWorker(
         private const val HEALTH_CHECK_INTERVAL_MIN = 15L
         private const val RESTART_NOTIFICATION_ID = 9001
 
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(HEALTH_CHECK_WORK_NAME)
+        }
+
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<HealthCheckWorker>(
                 HEALTH_CHECK_INTERVAL_MIN, TimeUnit.MINUTES

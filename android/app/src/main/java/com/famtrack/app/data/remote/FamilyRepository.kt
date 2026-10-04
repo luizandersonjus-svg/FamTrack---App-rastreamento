@@ -6,6 +6,8 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.rpc
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * Parâmetro da função "create_family" no banco.
@@ -218,12 +220,12 @@ class FamilyRepository {
     ): FamilyMember {
         return client.from("family_members")
             .insert(
-                mapOf(
-                    "family_id" to familyId,
-                    "user_id" to userId,
-                    "role" to role,
-                    "accepted" to accepted
-                )
+                buildJsonObject {
+                    put("family_id", familyId)
+                    put("user_id", userId)
+                    put("role", role)
+                    put("accepted", accepted)
+                }
             ) {
                 select()
             }
