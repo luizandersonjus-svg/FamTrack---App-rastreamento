@@ -50,7 +50,7 @@ object SupabaseClient {
         intent?.let {
             try {
                 getInstance().handleDeeplinks(it) { session ->
-                    android.util.Log.d("SupabaseClient", "Session imported (expira em ${session.expiresAt})")
+                    android.util.Log.d("SupabaseClient", "Session imported")
                 }
             } catch (e: Exception) {
                 android.util.Log.e("SupabaseClient", "Error handling deeplink", e)
