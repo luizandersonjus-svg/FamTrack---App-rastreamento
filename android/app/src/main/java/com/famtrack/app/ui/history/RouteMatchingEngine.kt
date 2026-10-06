@@ -1,6 +1,7 @@
 package com.famtrack.app.ui.history
 
 import android.util.Log
+import com.famtrack.app.BuildConfig
 import com.famtrack.app.data.model.RoutePoint
 import com.google.android.gms.maps.model.LatLng
 import io.ktor.client.HttpClient
@@ -10,6 +11,7 @@ import io.ktor.client.network.sockets.SocketTimeoutException
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import java.io.IOException
 import java.net.ConnectException
@@ -37,10 +39,10 @@ import kotlinx.serialization.json.jsonPrimitive
 // ---------------------------------------------------------------------------
 // OSRM Map Matching — UMA chamada por segmento, nunca uma trace que cruze gaps.
 //
-// ATENÇÃO — SERVIDOR ATUAL: router.project-osrm.org é o endpoint público de
-// DEMONSTRAÇÃO do projeto OSRM. Ele NÃO é um backend de produção: serve para
-// testes e uso residencial leve, SEM SLA, com throttling e possível
-// indisponibilidade. Para produção, avaliar provedor/self-hosted (CORR-0).
+// SERVIDOR: configurável via OSRM_BASE_URL no local.properties (TRACK-3).
+// Sem configuração, usa router.project-osrm.org, o endpoint público de
+// DEMONSTRAÇÃO: só para testes, uso não comercial e no máximo 1 req/s, sem
+// SLA. Servidor próprio: docs/osrm-servidor-proprio.md.
 // Dados de mapa: © OpenStreetMap (ODbL).
 //
 // CORR-0 (resiliência do cliente HTTP):
@@ -128,8 +130,32 @@ private val osrmClient = HttpClient(OkHttp) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TRACK-3: servidor configurável (local.properties -> BuildConfig).
+//  - OSRM_BASE_URL vazio: usa o servidor de DEMONSTRAÇÃO público. A política
+//    dele permite só uso não comercial e no máximo 1 requisição/segundo; o
+//    portão abaixo força 1 chamada por vez com 1,1 s de intervalo.
+//  - OSRM_API_KEY: enviado no cabeçalho X-FamTrack-Key; o proxy (Caddy) do
+//    servidor próprio recusa chamadas sem ele (docs/osrm-servidor-proprio.md).
+// ---------------------------------------------------------------------------
+private const val OSRM_DEMO_URL = "https://router.project-osrm.org"
+private const val OSRM_DEMO_MIN_SPACING_MS = 1_100L
+private const val OSRM_KEY_HEADER = "X-FamTrack-Key"
+
+private val OSRM_BASE_URL: String =
+    BuildConfig.OSRM_BASE_URL.trim().trimEnd('/').ifBlank { OSRM_DEMO_URL }
+
+private val OSRM_API_KEY: String = BuildConfig.OSRM_API_KEY.trim()
+
+/** true enquanto o app usa o servidor de demonstração (limite de 1 req/s). */
+internal val isUsingOsrmDemoServer: Boolean = OSRM_BASE_URL == OSRM_DEMO_URL
+
 /** Portão de concorrência: redimensionável em runtime (troca o semáforo). */
 private object OsrmGate {
+    private val spacingMutex = Mutex()
+    @Volatile
+    private var lastStartMs = 0L
+
     @Volatile
     private var semaphore = Semaphore(OsrmTuning.maxConcurrency)
     @Volatile
@@ -137,7 +163,8 @@ private object OsrmGate {
 
     /** Aplica o valor de [OsrmTuning.maxConcurrency] trocando o semáforo se mudou. */
     fun sync() {
-        val target = OsrmTuning.maxConcurrency.coerceIn(1, 20)
+        // Servidor de demonstração: 1 chamada por vez (política de uso).
+        val target = if (isUsingOsrmDemoServer) 1 else OsrmTuning.maxConcurrency.coerceIn(1, 20)
         OsrmTuning.maxConcurrency = target
         if (target != currentPermits) {
             semaphore = Semaphore(target)
@@ -147,11 +174,19 @@ private object OsrmGate {
     }
 
     suspend fun <T> withPermit(block: suspend () -> T): T {
-        semaphore.acquire()
+        val sem = semaphore
+        sem.acquire()
         try {
+            if (isUsingOsrmDemoServer) {
+                spacingMutex.withLock {
+                    val wait = lastStartMs + OSRM_DEMO_MIN_SPACING_MS - System.currentTimeMillis()
+                    if (wait > 0) delay(wait)
+                    lastStartMs = System.currentTimeMillis()
+                }
+            }
             return block()
         } finally {
-            semaphore.release()
+            sem.release()
         }
     }
 }
@@ -338,7 +373,6 @@ private suspend fun snapDecimated(
 //   o OSRM não deve partir o trecho por conta própria.
 // - tidy=true: limpa pontos redundantes/ruidosos antes do casamento.
 // ---------------------------------------------------------------------------
-private const val OSRM_BASE_URL = "https://router.project-osrm.org"
 private const val OSRM_MIN_RADIUS_M = 10.0
 private const val OSRM_MAX_RADIUS_M = 50.0
 private const val OSRM_DEFAULT_RADIUS_M = 25.0
@@ -562,7 +596,9 @@ private suspend fun singleOsrmAttempt(
     url: String,
     parse: (kotlinx.serialization.json.JsonObject) -> OsrmOutcome
 ): OsrmOutcome {
-    val response = osrmClient.get(url)
+    val response = osrmClient.get(url) {
+        if (OSRM_API_KEY.isNotEmpty()) header(OSRM_KEY_HEADER, OSRM_API_KEY)
+    }
     val status = response.status.value
     val text = response.bodyAsText()
 

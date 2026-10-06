@@ -210,6 +210,13 @@ fun MapLayerPanel(
                 ) {
                     Text(stringResource(R.string.map_trail_clear))
                 }
+                // TRACK-3: atribuição exigida pela licença ODbL do OpenStreetMap
+                // (o encaixe nas ruas usa dados do OSM via OSRM).
+                Text(
+                    text = stringResource(R.string.map_trail_osm_attribution),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             if (weatherOn) {
                 Spacer(modifier = Modifier.height(12.dp))

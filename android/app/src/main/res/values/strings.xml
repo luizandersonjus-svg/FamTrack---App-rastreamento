@@ -433,6 +433,7 @@
     <string name="map_layer_weather">Clima</string>
     <string name="map_layer_trail">Rastro ao vivo</string>
     <string name="map_trail_clear">Limpar rastro</string>
+    <string name="map_trail_osm_attribution">Rastro ajustado às ruas com dados © colaboradores do OpenStreetMap</string>
     <string name="map_legend_toggle">Legenda</string>
     <string name="map_legend_title">Legenda</string>
     <string name="map_legend_current">Localiza\u00e7\u00e3o atual</string>
