@@ -60,7 +60,6 @@ import kotlinx.serialization.json.jsonPrimitive
 // ---------------------------------------------------------------------------
 
 private const val OSRM_TAG = "FamTrackRouteMatching"
-private const val OSRM_URL = "https://router.project-osrm.org/match/v1/driving"
 
 /** Concorrência padrão para o endpoint demo público (escolhida após teste 3/6/10). */
 private const val OSRM_CONCURRENCY_DEFAULT = 6
@@ -87,7 +86,7 @@ internal object OsrmTuning {
 
 /** Resultado de uma tentativa de /match: sucesso, rejeição definitiva ou falha transitória. */
 private sealed interface OsrmOutcome {
-    data class Matched(val segment: MatchedSegment) : OsrmOutcome
+    data class Matched(val parts: List<List<LatLng>>) : OsrmOutcome
     data class Rejected(val code: String) : OsrmOutcome
     data class Transient(val reason: String, val cause: Exception) : OsrmOutcome
 }
@@ -282,18 +281,7 @@ private suspend fun matchSingleSegment(
         }
     }
 
-    val deferred = osrmScope.async {
-        val segment = try {
-            queryOsrm(decimated) ?: partialSegment(raw)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(OSRM_TAG, "matching inesperado: ${classifyFailure(e)}")
-            partialSegment(raw)
-        }
-        OsrmStats.record(segment.status == RouteMatchStatus.MATCHED)
-        segment
-    }
+    val deferred = osrmScope.async { snapDecimated(decimated, raw) }
 
     cacheMutex.withLock {
         OsrmRouteCache.store(key, CachedMatch.InFlight(deferred))
@@ -306,25 +294,224 @@ private suspend fun matchSingleSegment(
 }
 
 /**
- * Consulta o OSRM para um único trecho, com a resiliência do CORR-0:
- *  - semáforo limita chamadas simultâneas (3/6/10 configurável);
- *  - falhas transitórias RÁPIDAS (TLS, connect, DNS, 429, 5xx) têm retry com
- *    backoff exponencial; timeouts de rede não são retentados (budget 20s);
- *  - rejeição definitiva do OSRM (ex.: NoMatch) NÃO é retentada;
- *  - a causa real é classificada e registrada nos logs.
- * Retorna null quando não há caminho confiável (falta -> partialSegment).
+ * TRACK-2: encaixa um trecho contínuo (sem gaps) na malha viária, sem passar
+ * pelo cache LRU do Histórico. Usado pelo rastro ao vivo ([LiveTrailMatcher]),
+ * que mantém o próprio cache por bloco de pontos.
+ *
+ * Ordem de tentativa: /match (com raios e timestamps) -> /route pelos pontos
+ * (preenche trechos espaçados pelas ruas) -> pontos brutos (PARTIAL).
+ */
+internal suspend fun snapTraceToRoads(raw: List<RoutePoint>): MatchedSegment {
+    if (raw.size < 2) return partialSegment(raw)
+    OsrmGate.sync()
+    val decimated = capPoints(douglasPeucker(raw, DECIMATION_EPSILON_METERS))
+    return snapDecimated(decimated, raw)
+}
+
+private suspend fun snapDecimated(
+    decimated: List<RoutePoint>,
+    raw: List<RoutePoint>
+): MatchedSegment {
+    val segment = try {
+        queryOsrm(decimated)
+            ?: routeThroughPoints(raw)
+            ?: partialSegment(raw)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(OSRM_TAG, "matching inesperado: ${classifyFailure(e)}")
+        partialSegment(raw)
+    }
+    OsrmStats.record(segment.status == RouteMatchStatus.MATCHED)
+    return segment
+}
+
+// ---------------------------------------------------------------------------
+// TRACK-2: parâmetros do /match.
+//
+// - radiuses: raio de busca por ponto = precisão reportada pelo GPS, limitada
+//   a [OSRM_MIN_RADIUS_M, OSRM_MAX_RADIUS_M]. Sem isso o OSRM usa ~5 m e
+//   rejeita (NoMatch / matchings partidos) os fixes urbanos típicos de 20-60 m.
+// - timestamps: deixam o OSRM descartar caminhos incompatíveis com o tempo
+//   decorrido entre pontos espaçados (ex.: 45 s entre envios de um membro).
+// - gaps=ignore: lacunas já foram tratadas por splitSegments/LiveTrailStore;
+//   o OSRM não deve partir o trecho por conta própria.
+// - tidy=true: limpa pontos redundantes/ruidosos antes do casamento.
+// ---------------------------------------------------------------------------
+private const val OSRM_BASE_URL = "https://router.project-osrm.org"
+private const val OSRM_MIN_RADIUS_M = 10.0
+private const val OSRM_MAX_RADIUS_M = 50.0
+private const val OSRM_DEFAULT_RADIUS_M = 25.0
+
+/** Distância máxima para ligar dois pedaços de matching por /route. */
+private const val BRIDGE_MAX_DISTANCE_M = 1_000.0
+
+/** Decimação mais forte para o /route: menos pontos ruidosos = menos voltas falsas. */
+private const val ROUTE_FALLBACK_EPSILON_M = 25.0
+
+/** Waypoints máximos por /route (limite conservador do endpoint público). */
+private const val ROUTE_MAX_WAYPOINTS = 25
+
+/**
+ * Sanidade do /route: a rota pelas ruas não pode ser muito mais longa que o
+ * caminho percorrido pelo GPS (senão um ponto ruidoso gerou uma volta falsa).
+ */
+private const val ROUTE_MAX_LENGTH_RATIO = 1.6
+private const val ROUTE_MAX_EXTRA_M = 150.0
+
+private fun radiusFor(p: RoutePoint): Double {
+    val acc = p.accuracy?.toDouble()
+    if (acc == null || acc <= 0.0 || acc.isNaN()) return OSRM_DEFAULT_RADIUS_M
+    return acc.coerceIn(OSRM_MIN_RADIUS_M, OSRM_MAX_RADIUS_M)
+}
+
+private fun coordsParam(points: List<RoutePoint>): String =
+    points.joinToString(";") { "${it.longitude},${it.latitude}" }
+
+private fun radiusesParam(points: List<RoutePoint>): String =
+    points.joinToString(";") { String.format(java.util.Locale.US, "%.1f", radiusFor(it)) }
+
+/** Timestamps em segundos, ou null se algum faltar ou estiver fora de ordem. */
+private fun timestampsParam(points: List<RoutePoint>): String? {
+    val secs = points.map { parseTimestampMillis(it.recorded_at)?.div(1000) ?: return null }
+    for (i in 1 until secs.size) if (secs[i] < secs[i - 1]) return null
+    return secs.joinToString(";")
+}
+
+private fun pathLengthMeters(points: List<LatLng>): Double {
+    var total = 0.0
+    for (i in 1 until points.size) {
+        total += haversineMeters(
+            points[i - 1].latitude, points[i - 1].longitude,
+            points[i].latitude, points[i].longitude
+        )
+    }
+    return total
+}
+
+private fun parseGeometry(geometry: kotlinx.serialization.json.JsonObject?): List<LatLng> {
+    val coordsArray = geometry?.get("coordinates")?.jsonArray ?: return emptyList()
+    return coordsArray.map { arr ->
+        val c = arr.jsonArray
+        LatLng(c[1].jsonPrimitive.content.toDouble(), c[0].jsonPrimitive.content.toDouble())
+    }
+}
+
+/** Junta pedaços consecutivos sem repetir o ponto de emenda. */
+private fun appendPath(out: MutableList<LatLng>, part: List<LatLng>) {
+    if (part.isEmpty()) return
+    if (out.isNotEmpty() && out.last() == part.first()) out.addAll(part.drop(1)) else out.addAll(part)
+}
+
+/**
+ * Consulta o /match para um único trecho, com a resiliência do CORR-0.
+ * TRACK-2: envia radiuses/timestamps/gaps/tidy e aproveita TODOS os pedaços
+ * de `matchings` (antes só o primeiro era usado e o resto do trajeto caía para
+ * linha reta). Pedaços consecutivos são ligados pelas ruas via /route.
+ * Retorna null quando não há caminho confiável.
  */
 private suspend fun queryOsrm(decimated: List<RoutePoint>): MatchedSegment? {
     if (decimated.size < 2) return null
-    val coords = decimated.joinToString(";") { "${it.longitude},${it.latitude}" }
-    val url = "$OSRM_URL/$coords?geometries=geojson&overview=full"
+    val sb = StringBuilder("$OSRM_BASE_URL/match/v1/driving/")
+        .append(coordsParam(decimated))
+        .append("?geometries=geojson&overview=full&gaps=ignore&tidy=true")
+        .append("&radiuses=").append(radiusesParam(decimated))
+    timestampsParam(decimated)?.let { sb.append("&timestamps=").append(it) }
+    val url = sb.toString()
 
+    val parts = osrmCall(url, "match", decimated.size) { root ->
+        val matchings = root["matchings"]?.jsonArray
+        val geoms = matchings.orEmpty()
+            .map { parseGeometry(it.jsonObject["geometry"]?.jsonObject) }
+            .filter { it.size >= 2 }
+        if (geoms.isEmpty()) OsrmOutcome.Rejected("OK_EMPTY_GEOMETRY") else OsrmOutcome.Matched(geoms)
+    } ?: return null
+
+    val out = mutableListOf<LatLng>()
+    for ((i, part) in parts.withIndex()) {
+        if (i > 0 && out.isNotEmpty()) {
+            val from = out.last()
+            val to = part.first()
+            val gap = haversineMeters(from.latitude, from.longitude, to.latitude, to.longitude)
+            if (gap > 1.0) {
+                val bridge = if (gap <= BRIDGE_MAX_DISTANCE_M) routeBetween(from, to) else null
+                // Sem ponte pelas ruas: liga reto (trecho curto entre pedaços).
+                appendPath(out, bridge ?: listOf(from, to))
+            }
+        }
+        appendPath(out, part)
+    }
+    if (out.size < 2) return null
+    if (parts.size > 1) Log.d(OSRM_TAG, "match em ${parts.size} pedaços unidos (${out.size} pts)")
+    return MatchedSegment(out, RouteMatchStatus.MATCHED)
+}
+
+/** /route entre dois pontos (ponte entre pedaços de matching). */
+private suspend fun routeBetween(from: LatLng, to: LatLng): List<LatLng>? {
+    val url = "$OSRM_BASE_URL/route/v1/driving/" +
+        "${from.longitude},${from.latitude};${to.longitude},${to.latitude}" +
+        "?geometries=geojson&overview=full"
+    val straight = haversineMeters(from.latitude, from.longitude, to.latitude, to.longitude)
+    val path = osrmCall(url, "route", 2) { root -> parseRoute(root) }?.firstOrNull() ?: return null
+    val len = pathLengthMeters(path)
+    return if (len <= straight * ROUTE_MAX_LENGTH_RATIO * 2 + ROUTE_MAX_EXTRA_M) path else null
+}
+
+/**
+ * TRACK-2: quando o /match rejeita o trecho, traça o caminho PELAS RUAS
+ * passando pelos pontos (decimados com tolerância maior). Resolve as retas
+ * que cortavam quarteirões entre pontos espaçados. Rejeita o resultado se a
+ * rota ficar muito mais longa que o caminho do GPS (volta falsa causada por
+ * ponto ruidoso do lado errado da via).
+ */
+private suspend fun routeThroughPoints(raw: List<RoutePoint>): MatchedSegment? {
+    var pts = douglasPeucker(raw, ROUTE_FALLBACK_EPSILON_M)
+    var eps = ROUTE_FALLBACK_EPSILON_M
+    while (pts.size > ROUTE_MAX_WAYPOINTS && eps < 2_000.0) {
+        eps *= 2
+        pts = douglasPeucker(raw, eps)
+    }
+    if (pts.size < 2 || pts.size > ROUTE_MAX_WAYPOINTS) return null
+    val url = "$OSRM_BASE_URL/route/v1/driving/" + coordsParam(pts) +
+        "?geometries=geojson&overview=full&continue_straight=false" +
+        "&radiuses=" + radiusesParam(pts)
+    val path = osrmCall(url, "route", pts.size) { root -> parseRoute(root) }?.firstOrNull() ?: return null
+    val gpsLen = pathLengthMeters(raw.map { LatLng(it.latitude, it.longitude) })
+    val routeLen = pathLengthMeters(path)
+    if (routeLen > gpsLen * ROUTE_MAX_LENGTH_RATIO + ROUTE_MAX_EXTRA_M) {
+        Log.d(OSRM_TAG, "route descartada: gps=${gpsLen.toInt()}m rota=${routeLen.toInt()}m")
+        return null
+    }
+    Log.d(OSRM_TAG, "ROUTED: ${pts.size} waypoints -> ${path.size} pts")
+    return MatchedSegment(path, RouteMatchStatus.MATCHED)
+}
+
+private fun parseRoute(root: kotlinx.serialization.json.JsonObject): OsrmOutcome {
+    val geom = root["routes"]?.jsonArray?.firstOrNull()?.jsonObject?.get("geometry")?.jsonObject
+    val path = parseGeometry(geom)
+    return if (path.size >= 2) OsrmOutcome.Matched(listOf(path)) else OsrmOutcome.Rejected("OK_EMPTY_ROUTE")
+}
+
+/**
+ * Chamada ao OSRM com a resiliência do CORR-0:
+ *  - semáforo limita chamadas simultâneas (3/6/10 configurável);
+ *  - falhas transitórias RÁPIDAS (TLS, connect, DNS, 429, 5xx) têm retry com
+ *    backoff exponencial; timeouts de rede não são retentados (budget 20s);
+ *  - rejeição definitiva do OSRM (ex.: NoMatch/NoRoute) NÃO é retentada;
+ *  - a causa real é classificada e registrada nos logs.
+ */
+private suspend fun osrmCall(
+    url: String,
+    service: String,
+    inputSize: Int,
+    parse: (kotlinx.serialization.json.JsonObject) -> OsrmOutcome
+): List<List<LatLng>>? {
     var lastReason = "UNKNOWN"
     var lastCause: Exception? = null
     val attempts = 1 + OsrmTuning.maxRetries
     for (attempt in 1..attempts) {
         val outcome = try {
-            OsrmGate.withPermit { singleOsrmAttempt(url, decimated.size) }
+            OsrmGate.withPermit { singleOsrmAttempt(url, parse) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -333,24 +520,20 @@ private suspend fun queryOsrm(decimated: List<RoutePoint>): MatchedSegment? {
 
         when (outcome) {
             is OsrmOutcome.Matched -> {
-                Log.d(OSRM_TAG, "MATCHED: ${decimated.size} pts -> ${outcome.segment.points.size} casados (concurrency=${OsrmTuning.maxConcurrency})")
-                return outcome.segment
+                Log.d(OSRM_TAG, "$service OK: $inputSize pts -> ${outcome.parts.sumOf { it.size }} pts em ${outcome.parts.size} pedaço(s)")
+                return outcome.parts
             }
             is OsrmOutcome.Rejected -> {
-                Log.d(OSRM_TAG, "REJEITADO_${outcome.code}: ${decimated.size} pts (definitivo, sem retry)")
+                Log.d(OSRM_TAG, "$service REJEITADO_${outcome.code}: $inputSize pts (definitivo, sem retry)")
                 return null
             }
             is OsrmOutcome.Transient -> {
                 lastReason = outcome.reason
                 lastCause = outcome.cause
-                // Retry só para falhas RÁPIDAS (handshake TLS/connect/DNS/429/5xx).
-                // Timeouts de rede/leitura indicam servidor lento ou inacessível:
-                // retentá-los estouraria o withTimeout de 20s do HomeScreen sem
-                // ganho real (a 2ª tentativa tende a falhar igual).
                 val retryable = shouldRetry(lastReason)
                 if (retryable && attempt < attempts) {
                     val backoff = OsrmTuning.retryBaseDelayMs * (1L shl (attempt - 1))
-                    Log.w(OSRM_TAG, "tentativa $attempt/$attempts: reason=$lastReason backoff=${backoff}ms")
+                    Log.w(OSRM_TAG, "$service tentativa $attempt/$attempts: reason=$lastReason backoff=${backoff}ms")
                     delay(backoff)
                 } else if (!retryable) {
                     break
@@ -358,9 +541,9 @@ private suspend fun queryOsrm(decimated: List<RoutePoint>): MatchedSegment? {
             }
         }
     }
-    Log.w(OSRM_TAG, "falhou após $attempts tentativas: reason=$lastReason")
-    if (lastCause != null && lastReason == "TLS") {
-        val c = lastCause!!
+    Log.w(OSRM_TAG, "$service falhou após $attempts tentativas: reason=$lastReason")
+    val c = lastCause
+    if (c != null && lastReason == "TLS") {
         Log.d(OSRM_TAG, "detalhe TLS: ${c.javaClass.simpleName}: ${c.message?.take(200) ?: "-"}")
     }
     return null
@@ -375,32 +558,25 @@ private fun shouldRetry(reason: String): Boolean = when {
 }
 
 /** Uma tentativa HTTP única (dentro do limite de concorrência). */
-private suspend fun singleOsrmAttempt(url: String, inputSize: Int): OsrmOutcome {
+private suspend fun singleOsrmAttempt(
+    url: String,
+    parse: (kotlinx.serialization.json.JsonObject) -> OsrmOutcome
+): OsrmOutcome {
     val response = osrmClient.get(url)
     val status = response.status.value
     val text = response.bodyAsText()
 
     if (status == 429) throw TransientOsrmException("RATE_LIMIT_429")
     if (status >= 500) throw TransientOsrmException("SERVER_ERROR_$status")
-    if (status != 200) throw TransientOsrmException("HTTP_$status")
-
-    val root = Json.parseToJsonElement(text).jsonObject
-    val code = root["code"]?.jsonPrimitive?.content ?: "UNKNOWN"
+    // 400 com JSON é rejeição definitiva do OSRM (NoMatch, NoRoute, TooBig...).
+    val root = try {
+        Json.parseToJsonElement(text).jsonObject
+    } catch (e: Exception) {
+        throw TransientOsrmException("HTTP_$status")
+    }
+    val code = root["code"]?.jsonPrimitive?.content ?: "HTTP_$status"
     if (code != "Ok") return OsrmOutcome.Rejected(code)
-
-    val matchings = root["matchings"]?.jsonArray
-    val geometry = matchings?.firstOrNull()?.jsonObject?.get("geometry")?.jsonObject
-    val coordsArray = geometry?.get("coordinates")?.jsonArray
-    if (coordsArray.isNullOrEmpty()) {
-        Log.w(OSRM_TAG, "OK mas sem geometria (${inputSize} pts)")
-        return OsrmOutcome.Rejected("OK_EMPTY_GEOMETRY")
-    }
-    val points = coordsArray.map { arr ->
-        val c = arr.jsonArray
-        LatLng(c[1].jsonPrimitive.content.toDouble(), c[0].jsonPrimitive.content.toDouble())
-    }
-    if (points.size < 2) return OsrmOutcome.Rejected("OK_TOO_SHORT")
-    return OsrmOutcome.Matched(MatchedSegment(points, RouteMatchStatus.MATCHED))
+    return parse(root)
 }
 
 /** Classifica a causa exata da falha para diagnóstico (CORR-0). */
