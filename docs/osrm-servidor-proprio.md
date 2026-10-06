@@ -31,6 +31,15 @@ Tempo estimado: 1 a 2 horas, a maior parte esperando o mapa ser processado.
 
 ---
 
+## Atalho: instalação automática
+
+Em vez dos passos 3b, 5, 6 e 7 pelo terminal, cole o script
+[`oracle-cloud-init.sh`](oracle-cloud-init.sh) (com as 3 linhas do topo
+preenchidas) em **Opções avançadas → Gerenciamento → script cloud-init** ao
+criar a instância. A máquina se configura sozinha em cerca de 1 hora. Ainda é
+preciso fazer o passo 3a (Security List) e criar o subdomínio no DuckDNS
+(passo 4, sem precisar colocar o IP: o script faz isso).
+
 ## 1. Criar a conta na Oracle Cloud
 
 1. Acesse <https://www.oracle.com/cloud/free/> e crie a conta.
