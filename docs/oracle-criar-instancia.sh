@@ -26,8 +26,9 @@ INTERVALO=60
 C="${OCI_TENANCY:?Rode este script no Cloud Shell da Oracle}"
 
 [ -f "$INIT_FILE" ] || { echo "ERRO: envie o $INIT_FILE para esta pasta (menu do Cloud Shell > Upload)."; exit 1; }
-if grep -q 'PREENCHA' "$INIT_FILE"; then
-  echo "ERRO: preencha as linhas PREENCHA (DuckDNS) no $INIT_FILE antes de continuar."; exit 1
+if grep -qE 'PREENCHA|SEU_SUBDOMINIO|SEU_TOKEN' "$INIT_FILE"; then
+  echo "ERRO: o $INIT_FILE ainda tem PREENCHA / SEU_SUBDOMINIO / SEU_TOKEN."
+  echo "      Coloque o seu subdomínio e o seu token do DuckDNS antes de continuar."; exit 1
 fi
 
 q() { oci "$@" --raw-output 2>/dev/null; }
@@ -103,10 +104,13 @@ while true; do
     --subnet-id "$SUBNET" --assign-public-ip true \
     --ssh-authorized-keys-file ~/.ssh/id_rsa.pub \
     --user-data-file "$INIT_FILE" 2>&1)
-  if echo "$SAIDA" | grep -q '"lifecycle-state"'; then
+  # Comparação sem pipes: com "set -o pipefail", "echo | grep -q" pode falhar
+  # por SIGPIPE e classificar falta de vaga como erro desconhecido.
+  SAIDA_MIN="${SAIDA,,}"
+  if [[ "$SAIDA" == *'"lifecycle-state"'* ]]; then
     echo "$(date '+%H:%M:%S') tentativa $TENTATIVA: CRIADA!"
     break
-  elif echo "$SAIDA" | grep -qiE 'capacity|TooManyRequests|429'; then
+  elif [[ "$SAIDA_MIN" == *capacity* || "$SAIDA_MIN" == *toomanyrequests* || "$SAIDA_MIN" == *'"status": 429'* || "$SAIDA_MIN" == *'"status": 500'* || "$SAIDA_MIN" == *internalerror* ]]; then
     echo "$(date '+%H:%M:%S') tentativa $TENTATIVA: sem vaga, tentando de novo em ${INTERVALO}s"
     sleep "$INTERVALO"
   else
