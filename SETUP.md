@@ -100,6 +100,12 @@
 SUPABASE_URL=https://SEU-PROJETO.supabase.co
 SUPABASE_ANON_KEY=sua-chave-anon-aqui
 GOOGLE_MAPS_API_KEY=sua-chave-google-maps-aqui
+
+# Opcional: servidor OSRM próprio (encaixe do rastro nas ruas).
+# Sem estas linhas, o app usa o servidor de demonstração (só para testes).
+# Guia: docs/osrm-servidor-proprio.md
+OSRM_BASE_URL=https://seu-subdominio.duckdns.org
+OSRM_API_KEY=sua-chave-osrm
 ```
 
 3. Para obter a chave do Google Maps:

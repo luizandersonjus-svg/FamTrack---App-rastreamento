@@ -128,6 +128,46 @@ private val TRAIL_PALETTE = listOf(
     Color(0xFF6D4C41)  // marrom
 )
 
+/** TRACK-2: padrão tracejado do trecho de GPS bruto (provisório/aproximado). */
+private val TRAIL_PROVISIONAL_PATTERN = listOf(
+    com.google.android.gms.maps.model.Dash(24f),
+    com.google.android.gms.maps.model.Gap(14f)
+)
+
+/**
+ * TRACK-2: pedaços a desenhar para um membro. Usa o encaixe nas ruas quando
+ * existe e completa com os pontos brutos que chegaram depois do último
+ * encaixe (tracejados). Sem encaixe ainda, desenha tudo em bruto tracejado.
+ */
+private fun trailPiecesForDrawing(
+    segments: List<List<TrailPoint>>,
+    snapped: SnappedTrail?
+): List<TrailPiece> {
+    fun toLatLng(p: TrailPoint) = com.google.android.gms.maps.model.LatLng(p.latitude, p.longitude)
+    // Encaixe anterior ao primeiro ponto atual (rastro limpo ou virada do dia)
+    // não pertence a este rastro: ignora até o próximo processamento.
+    val firstTs = segments.firstOrNull { it.size >= 2 }?.firstOrNull()?.recordedAt
+    if (snapped == null || snapped.pieces.isEmpty() ||
+        (firstTs != null && snapped.coveredUntil < firstTs)
+    ) {
+        return segments.filter { it.size >= 2 }.map { seg -> TrailPiece(seg.map(::toLatLng), onRoad = false) }
+    }
+    val out = snapped.pieces.toMutableList()
+    val lastSeg = segments.lastOrNull { it.size >= 2 } ?: return out
+    val newer = lastSeg.filter { it.recordedAt > snapped.coveredUntil }
+    if (newer.isNotEmpty()) {
+        // Liga o fim do último pedaço desenhado aos pontos mais novos, desde que
+        // sejam do mesmo trecho (o ponto anterior a eles já estava coberto).
+        val firstNewIdx = lastSeg.indexOf(newer.first())
+        val anchor = lastSeg.getOrNull(firstNewIdx - 1)
+            ?.takeIf { it.recordedAt <= snapped.coveredUntil }
+            ?.let { out.lastOrNull()?.points?.lastOrNull() }
+        val pts = listOfNotNull(anchor) + newer.map(::toLatLng)
+        if (pts.size >= 2) out += TrailPiece(pts, onRoad = false)
+    }
+    return out
+}
+
 /** Cor estável por membro: hash determinístico do userId sobre a paleta. */
 private fun trailColorForMember(userId: String): Color {
     val idx = Math.floorMod(userId.hashCode(), TRAIL_PALETTE.size)
@@ -202,6 +242,11 @@ fun HomeScreen(
     // saltos implausíveis/lacunas, para não desenhar retas cruzando o mapa).
     var trailPolylines by remember {
         mutableStateOf<Map<String, List<List<TrailPoint>>>>(emptyMap())
+    }
+    // TRACK-2: rastro encaixado nas ruas (LiveTrailMatcher). Enquanto um membro
+    // ainda não tem encaixe, o desenho usa os pontos brutos de trailPolylines.
+    var snappedTrails by remember {
+        mutableStateOf<Map<String, SnappedTrail>>(emptyMap())
     }
     var showLegend by remember { mutableStateOf(false) }
     var mapBaseType by remember {
@@ -436,6 +481,34 @@ fun HomeScreen(
                 trailPolylines = LiveTrailStore.snapshot()
             }
             kotlinx.coroutines.delay(2_000L)
+        }
+    }
+
+    // TRACK-2: encaixa o rastro nas ruas em segundo plano. Lê sempre o snapshot
+    // mais recente; o matcher só consulta o servidor para blocos novos ou para o
+    // trecho final (no máximo a cada 15 s por membro), então o laço é barato.
+    val latestTrails by rememberUpdatedState(trailPolylines)
+    LaunchedEffect(layerTrail) {
+        if (!layerTrail) return@LaunchedEffect
+        var seen: Map<String, List<List<TrailPoint>>>? = null
+        var lastRunMs = 0L
+        while (true) {
+            val current = latestTrails
+            val now = android.os.SystemClock.elapsedRealtime()
+            // Roda quando há pontos novos, ou a cada 15 s (repete trechos que falharam).
+            if (current !== seen || now - lastRunMs >= 15_000L) {
+                seen = current
+                lastRunMs = now
+                snappedTrails = try {
+                    LiveTrailMatcher.snap(current)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("FamTrackTrailSnap", "encaixe falhou: ${e.localizedMessage?.take(80)}")
+                    snappedTrails
+                }
+            }
+            delay(3_000L)
         }
     }
 
@@ -1217,25 +1290,19 @@ label = {
                 if (layerTrail) {
                     // Rastro ao vivo (TRACK-1c): polyline por membro com os pontos já
                     // filtrados/decimados pelo LiveTrailStore e cor estável por membro.
+                    // TRACK-2: trechos encaixados nas ruas em linha cheia; GPS bruto
+                    // (ainda não processado ou não encaixável) em linha tracejada.
                     trailPolylines.forEach { (uid, segments) ->
-                        val drawable = segments.filter { it.size >= 2 }
-                        if (drawable.isNotEmpty()) {
-                            Log.d(
-                                "FamTrackTrailUI",
-                                "desenhando polyline: user=${uid.take(8)} " +
-                                    "segmentos=${drawable.size} pontos=${drawable.sumOf { it.size }}"
-                            )
-                            drawable.forEach { seg ->
+                        val color = trailColorForMember(uid)
+                        val pieces = trailPiecesForDrawing(segments, snappedTrails[uid])
+                        pieces.forEach { piece ->
+                            if (piece.points.size >= 2) {
                                 Polyline(
-                                    points = seg.map {
-                                        com.google.android.gms.maps.model.LatLng(
-                                            it.latitude,
-                                            it.longitude
-                                        )
-                                    },
-                                    color = trailColorForMember(uid),
+                                    points = piece.points,
+                                    color = if (piece.onRoad) color else color.copy(alpha = 0.6f),
                                     width = 8f,
-                                    zIndex = 0.4f
+                                    zIndex = 0.4f,
+                                    pattern = if (piece.onRoad) null else TRAIL_PROVISIONAL_PATTERN
                                 )
                             }
                         }
@@ -1270,7 +1337,10 @@ label = {
                         layerTrail = on
                         MapLayerPrefs.setOn(context, MapLayer.TRAIL, on)
                     },
-                    onClearTrail = { LiveTrailStore.clearToday() },
+                    onClearTrail = {
+                        LiveTrailStore.clearToday()
+                        snappedTrails = emptyMap()
+                    },
                     onShowLegend = { showLegend = !showLegend },
                     onDismiss = { layersSheetOpen = false },
                     members = familyLocations

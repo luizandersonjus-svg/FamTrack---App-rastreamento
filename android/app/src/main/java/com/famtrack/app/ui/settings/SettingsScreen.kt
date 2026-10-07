@@ -802,6 +802,13 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 Text("Versao 1.0.0")
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("App de rastreamento familiar.")
+                Spacer(modifier = Modifier.height(8.dp))
+                // TRACK-3: atribuição exigida pela licença ODbL do OpenStreetMap.
+                Text(
+                    "Rotas e rastro ajustados às ruas com dados © colaboradores do " +
+                        "OpenStreetMap (licença ODbL), via OSRM.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         },
         confirmButton = {
