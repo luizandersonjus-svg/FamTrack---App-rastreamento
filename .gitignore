@@ -29,3 +29,6 @@ Thumbs.db
 
 # ===== Diagnóstico do dispositivo (logcat/dumps) =====
 diag/
+
+# ===== Logs de build locais =====
+build_log*.txt
