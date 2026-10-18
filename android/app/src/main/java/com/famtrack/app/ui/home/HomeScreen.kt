@@ -208,7 +208,11 @@ fun HomeScreen(
     onNavigateToPrivacy: () -> Unit,
     onNavigateToRoutes: () -> Unit,
     onNavigateToMemberHistory: (String) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    // Usuário sem família: "Entrar com código" (tela de convite) e família
+    // recém-criada (recarrega a Home já com a família).
+    onNavigateToJoinFamily: () -> Unit = {},
+    onFamilyReady: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -219,10 +223,7 @@ fun HomeScreen(
 
     var hasLocationPermission by remember {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
+            hasAnyLocationPermission(context)
         )
     }
 
@@ -281,7 +282,14 @@ fun HomeScreen(
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
     var checkoutBusy by remember { mutableStateOf(false) }
-    var onboardingPending by remember { mutableStateOf(true) }
+    // null = ainda lendo a preferência (DataStore): não mostra o onboarding
+    // "piscando" a cada entrada na Home de quem já o concluiu.
+    // true só quando o servidor confirmou que o usuário não está em nenhuma
+    // família (falha de rede NÃO conta: não oferece criar família por engano).
+    var noFamily by remember { mutableStateOf(false) }
+    var showCreateFamily by remember { mutableStateOf(false) }
+    var creatingFamily by remember { mutableStateOf(false) }
+    var onboardingPending by remember { mutableStateOf<Boolean?>(null) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var membersPanelExpanded by remember { mutableStateOf(false) }
@@ -321,7 +329,15 @@ fun HomeScreen(
         }
     }
 
-    if (onboardingPending) {
+    if (onboardingPending == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        )
+        return
+    }
+    if (onboardingPending == true) {
         OnboardingScreen(
             onFinished = {
                 scope.launch { onboardingPending = false }
@@ -384,6 +400,33 @@ fun HomeScreen(
         }
     }
 
+    // O FLP da tela (alta precisão, 3 s) só faz sentido com o app visível: com o
+    // app em segundo plano a Home continua composta e ele rodaria em paralelo ao
+    // do LocationService, gastando bateria. Desliga em ON_STOP, religa em ON_START.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val currentStartUiLocationUpdates by rememberUpdatedState(startUiLocationUpdates)
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    uiLocationCallback?.let {
+                        LocationServices.getFusedLocationProviderClient(context)
+                            .removeLocationUpdates(it)
+                    }
+                    uiLocationCallback = null
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                    if (uiLocationCallback == null && hasAnyLocationPermission(context)) {
+                        currentStartUiLocationUpdates()
+                    }
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -414,6 +457,7 @@ fun HomeScreen(
             if (user != null) {
                 userId = user.id
                 val member = familyRepository.getUserFamily(user.id)
+                noFamily = member == null
                 if (member != null) {
                     familyId = member.family_id
                     familyLocations = locationRepository.getFamilyLocations(member.family_id)
@@ -912,16 +956,24 @@ fun HomeScreen(
                 if (level != null && level < 20) {
                     val key = "${loc.user_id}_$today"
                     if (!prefs.getBoolean(key, false)) {
-                        ActivityRepository().recordEvent(
-                            Event(
-                                family_id = fid,
-                                type = "LOW_BATTERY",
-                                member_id = loc.user_id,
-                                lat = loc.latitude,
-                                lng = loc.longitude
+                        // Sem rede/RLS, o registro falha: não pode derrubar o app.
+                        // Só marca o dia como registrado se o evento foi gravado.
+                        try {
+                            ActivityRepository().recordEvent(
+                                Event(
+                                    family_id = fid,
+                                    type = "LOW_BATTERY",
+                                    member_id = loc.user_id,
+                                    lat = loc.latitude,
+                                    lng = loc.longitude
+                                )
                             )
-                        )
-                        prefs.edit().putBoolean(key, true).apply()
+                            prefs.edit().putBoolean(key, true).apply()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w("HomeScreen", "Falha ao registrar bateria fraca", e)
+                        }
                     }
                 }
             }
@@ -1584,6 +1636,65 @@ label = {
                         }
                     }
                 }
+                noFamily -> {
+                    // Usuário novo (sem família): caminho claro para começar.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Filled.GroupAdd,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = stringResource(R.string.home_no_family_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.home_no_family_text),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Button(
+                                    onClick = { showCreateFamily = true },
+                                    enabled = !creatingFamily,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.home_no_family_create))
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = onNavigateToJoinFamily,
+                                    enabled = !creatingFamily,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.home_no_family_join))
+                                }
+                            }
+                        }
+                    }
+                }
                 currentLocation == null -> {
                     Box(
                         modifier = Modifier.fillMaxSize(),
@@ -2082,6 +2193,35 @@ label = {
         }
     }
 
+    if (showCreateFamily) {
+        com.famtrack.app.ui.geofence.CreateFamilyDialog(
+            onDismiss = { showCreateFamily = false },
+            onCreate = { name ->
+                val trimmed = name.trim()
+                if (trimmed.isNotEmpty() && !creatingFamily) {
+                    creatingFamily = true
+                    scope.launch {
+                        try {
+                            familyRepository.createFamily(name = trimmed)
+                            showCreateFamily = false
+                            // Recarrega a Home já com a família (inicia o
+                            // compartilhamento e o carregamento normal).
+                            onFamilyReady()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.e("HomeScreen", "Falha ao criar família", e)
+                            showCreateFamily = false
+                            sosMessage = context.getString(R.string.home_no_family_create_fail)
+                        } finally {
+                            creatingFamily = false
+                        }
+                    }
+                }
+            }
+        )
+    }
+
     selectedMember?.let { member ->
         val info = memberInfos[member.user_id]
         MemberDetailBottomSheet(
@@ -2151,11 +2291,8 @@ private fun startSharingService(
 ) {
     if (userId == null || familyId == null) return
 
-    if (ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-    ) {
+    // FINE ou COARSE: com "localização aproximada" (Android 12+) também funciona.
+    if (hasAnyLocationPermission(context)) {
         LocationService.startService(context, familyId, userId)
     }
 }
@@ -2242,6 +2379,15 @@ private fun seedCameraFromLastLocation(
     }
 }
 
+/** Localização concedida, precisa (FINE) ou aproximada (COARSE). */
+private fun hasAnyLocationPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
 /** Registra o FLP da tela; devolve o callback para ser removido no dispose. */
 private fun startLocationUpdates(
     context: Context,
@@ -2266,11 +2412,8 @@ private fun startLocationUpdates(
         }
     }
 
-    if (ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-    ) {
+    // FINE ou COARSE: com "localização aproximada" (Android 12+) também funciona.
+    if (hasAnyLocationPermission(context)) {
         locationClient.requestLocationUpdates(
             locationRequest,
             locationCallback,

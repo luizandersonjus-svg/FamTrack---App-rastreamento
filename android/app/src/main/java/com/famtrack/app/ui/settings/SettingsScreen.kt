@@ -427,25 +427,27 @@ fun SettingsScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             ) {
-                Column {
-                    var notificationsEnabled by remember { mutableStateOf(true) }
-                    SettingsSwitchItem(
-                        icon = Icons.Default.Notifications,
-                        title = "Notificacoes push",
-                        subtitle = "Receber alertas de SOS e geofences",
-                        checked = notificationsEnabled,
-                        onCheckedChange = { notificationsEnabled = it }
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    var locationSharing by remember { mutableStateOf(true) }
-                    SettingsSwitchItem(
-                        icon = Icons.Default.LocationOn,
-                        title = "Compartilhar localizacao",
-                        subtitle = "Permitir que membros vejam sua posicao",
-                        checked = locationSharing,
-                        onCheckedChange = { locationSharing = it }
-                    )
-                }
+                // Antes havia dois interruptores "de enfeite" (só mudavam estado em
+                // memória). O de notificações agora abre o ajuste real do sistema;
+                // pausar a localização fica no interruptor de privacidade.
+                SettingsItem(
+                    icon = Icons.Default.Notifications,
+                    title = "Notificações",
+                    subtitle = "Escolher quais alertas (SOS, chegadas e saídas) este aparelho recebe",
+                    onClick = {
+                        val intent = android.content.Intent(
+                            android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                        ).putExtra(
+                            android.provider.Settings.EXTRA_APP_PACKAGE,
+                            context.packageName
+                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: android.content.ActivityNotFoundException) {
+                            android.util.Log.w("Settings", "Ajustes de notificação indisponíveis", e)
+                        }
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))

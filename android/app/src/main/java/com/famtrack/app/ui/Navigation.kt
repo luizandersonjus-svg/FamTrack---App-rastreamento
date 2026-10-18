@@ -94,8 +94,9 @@ fun FamTrackNavigation() {
                     navController.popBackStack()
                 },
                 onJoined = {
+                    // Recria a Home já com a família (a pilha pode não ter "login").
                     navController.navigate("home") {
-                        popUpTo("login") { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 }
             )
@@ -135,6 +136,14 @@ fun FamTrackNavigation() {
                 },
                 onLogout = {
                     navController.navigate("login") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onNavigateToJoinFamily = {
+                    navController.navigate("joinFamily")
+                },
+                onFamilyReady = {
+                    navController.navigate("home") {
                         popUpTo(0) { inclusive = true }
                     }
                 }
