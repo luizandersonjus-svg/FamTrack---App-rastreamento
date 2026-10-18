@@ -27,8 +27,10 @@ App Android nativo para rastreamento de localização familiar em tempo real.
 3. Execute no SQL Editor, nesta ordem: `setup_supabase.sql`, `02_migracao_correcoes.sql`,
    `fix_rls_recursion.sql`, `03_feature_migracao.sql`, `04_route_history.sql`,
    `05_places_types.sql`, `06_sos_correcoes.sql`, `07_locations_upsert.sql`,
-   `08_telemetry.sql`, `09_notifications_delete.sql` e `10_security_hardening.sql`
-   (em um banco já existente, basta rodar o `10_security_hardening.sql`)
+   `08_telemetry.sql`, `09_notifications_delete.sql`, `10_security_hardening.sql` e
+   `11_family_rpcs_and_member_security.sql`
+   (em um banco já existente, basta rodar o `10_security_hardening.sql` e depois o
+   `11_family_rpcs_and_member_security.sql` — leia antes os PRÉ-CHECKS no topo do 11)
 4. Copie a URL e a anon key
 
 ### 2. Configure o Google Cloud

@@ -26,6 +26,9 @@
 3. Cole TODO o conteúdo do arquivo `sql/01_schema.sql`
 4. Clique em **"Run"** (botão verde)
 5. Aguarde a mensagem de sucesso
+6. Rode também, um por vez e na ordem, os demais arquivos de `sql/` listados no
+   README (seção "Configure o Supabase"), até o `11_family_rpcs_and_member_security.sql`.
+   Sem o `11`, criar/entrar em família pelo app não funciona.
 
 ## Passo 4: Habilitar Auth (Login)
 
