@@ -239,6 +239,9 @@ class LocationService : Service() {
                 // Se o FLP não chegou a ser registrado (ex.: sem permissão no
                 // primeiro start), tenta de novo; é idempotente.
                 if (locationCallback == null) startLocationUpdates()
+                // Permissão de passos concedida com o tracking já rodando
+                // (onboarding/Configurações): começa a contar sem reiniciar.
+                if (stepSensor == null) registerStepSensor()
             } catch (e: Exception) {
                 Log.e(TAG, "Falha ao reafirmar foreground: ${e.localizedMessage}")
             }
