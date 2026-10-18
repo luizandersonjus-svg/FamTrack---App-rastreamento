@@ -19,6 +19,7 @@ import com.famtrack.app.service.LocationService
 import com.famtrack.app.ui.FamTrackNavigation
 import com.famtrack.app.ui.home.HomeDataRefresh
 import com.famtrack.app.ui.theme.FamTrackTheme
+import com.famtrack.app.util.MapCameraSession
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -53,6 +54,14 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         revalidateTrackingState()
         HomeDataRefresh.publish()
+        // Câmera do mapa: voltar depois de um tempo conta como "abrir o app"
+        // (re-centraliza no usuário) e dá a vez de consumir o deep link de SOS.
+        MapCameraSession.onAppResumed()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        MapCameraSession.onAppStopped()
     }
 
     /**
