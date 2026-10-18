@@ -28,8 +28,12 @@ class SosRepository {
             accuracy?.let { put("accuracy", it) }
             fixAt?.let { put("fix_at", java.time.Instant.ofEpochMilli(it).toString()) }
         }
+        // select(): sem ele o PostgREST responde "return=minimal" (corpo vazio)
+        // e o decodeSingle lançava exceção DEPOIS do insert ter dado certo.
         val alert = client.from("sos_alerts")
-            .insert(payload)
+            .insert(payload) {
+                select()
+            }
             .decodeSingle<SosAlert>()
 
         // Notifica todos os membros da família (exceto o remetente)

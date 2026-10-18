@@ -11,8 +11,12 @@ class GeofenceRepository {
 
     // Criar geofence
     suspend fun createGeofence(geofence: Geofence): Geofence {
+        // select(): sem ele a resposta vem vazia (return=minimal) e o
+        // decodeSingle falhava mesmo com a geofence já gravada.
         return client.from("geofences")
-            .insert(geofence)
+            .insert(geofence) {
+                select()
+            }
             .decodeSingle<Geofence>()
     }
 

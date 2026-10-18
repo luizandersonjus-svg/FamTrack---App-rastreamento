@@ -54,6 +54,24 @@ class NotificationRepository {
             .decodeList<Notification>()
     }
 
+    /** Notificações recentes do próprio usuário de um tipo (ex.: "geofence"). */
+    suspend fun getUserNotificationsOfType(
+        userId: String,
+        type: String,
+        maxRows: Long
+    ): List<Notification> {
+        return client.from("notifications")
+            .select {
+                filter {
+                    eq("user_id", userId)
+                    eq("type", type)
+                }
+                order("created_at", Order.DESCENDING)
+                limit(maxRows)
+            }
+            .decodeList<Notification>()
+    }
+
     suspend fun markAsRead(notificationId: String) {
         client.from("notifications")
             .update(mapOf("read" to true)) {

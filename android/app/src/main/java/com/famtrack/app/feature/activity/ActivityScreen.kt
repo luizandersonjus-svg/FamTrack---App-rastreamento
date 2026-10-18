@@ -25,7 +25,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import android.content.Context
 import com.famtrack.app.R
+import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.remote.FamilyRepository
+import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.feature.common.AddressOutcome
 import com.famtrack.app.feature.common.AddressResolver
@@ -82,6 +84,8 @@ fun ActivityScreen(
     var memberNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var placeNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var places by remember { mutableStateOf<List<Place>>(emptyList()) }
+    // Áreas de alerta (geofences) sem place vinculado: nome para ENTER/EXIT.
+    var geofences by remember { mutableStateOf<List<Geofence>>(emptyList()) }
     var eventLocations by remember {
         mutableStateOf<Map<String, EventLocation>>(emptyMap())
     }
@@ -123,6 +127,14 @@ fun ActivityScreen(
                 places = familyPlaces
                 placeNames = familyPlaces
                     .associate { (it.id ?: "") to it.name }
+                geofences = try {
+                    GeofenceRepository().getFamilyGeofences(fid)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Opcional: sem geofences, ENTER/EXIT caem no endereço.
+                    emptyList()
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
                 error = e.message
@@ -154,12 +166,12 @@ fun ActivityScreen(
 
     // Resolve endereço/place de cada evento com coordenadas, uma única vez por
     // evento (chave estável). O Geocoder roda fora da recomposition e tem cache.
-    LaunchedEffect(events, places) {
+    LaunchedEffect(events, places, geofences) {
         val current = eventLocations
         val missing = events.filter { current.containsKey(eventKey(it)).not() }
         if (missing.isEmpty()) return@LaunchedEffect
         val additions = withContext(Dispatchers.IO) {
-            missing.map { event -> eventKey(event) to resolveEventLocation(context, event, places) }
+            missing.map { event -> eventKey(event) to resolveEventLocation(context, event, places, geofences) }
                 .toMap()
         }
         eventLocations = current + additions
@@ -400,7 +412,8 @@ private fun eventHasCoords(event: Event): Boolean =
 private suspend fun resolveEventLocation(
     context: Context,
     event: Event,
-    places: List<Place>
+    places: List<Place>,
+    geofences: List<Geofence> = emptyList()
 ): EventLocation {
     if (!eventHasCoords(event)) return EventLocation(null, null)
 
@@ -418,6 +431,19 @@ private suspend fun resolveEventLocation(
     // ETAPA 11-C3: check-in usa o RÓTULO ÚNICO (10A) — só o lugar cujo raio
     // real contém a coordenada (nunca "mais próxima" nem o heurístico "perto").
     val isCheckin = event.type == "CHECKIN"
+    // ENTER/EXIT são gravados no centro da área (LocationService): uma área
+    // de alerta sem place vinculado é encontrada aqui pela coordenada.
+    val geofenceName = if (
+        (event.type == "ENTER" || event.type == "EXIT") && direct == null && exact == null
+    ) {
+        geofences.firstOrNull {
+            isInsideGeofence(event.lat, event.lng, it.center_lat, it.center_lon, it.radius_meters)
+        }?.name
+    } else {
+        null
+    }
+    if (geofenceName != null) return EventLocation(geofenceName, null)
+
     val messagePlace = if (isCheckin) {
         direct?.name ?: exact?.name
     } else {
