@@ -312,20 +312,7 @@ fun HomeScreen(
     // 15 min = minimo do WorkManager (5 era arredondado para 15). Politica UPDATE
     // substitui o agendamento antigo. Ver GeofenceWorker (fila + repasse de alertas).
     LaunchedEffect(familyId) {
-        if (familyId != null) {
-            val workRequest = PeriodicWorkRequestBuilder<GeofenceWorker>(
-                GeofenceWorker.REPEAT_INTERVAL_MINUTES, TimeUnit.MINUTES
-            ).setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .build()
-            ).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                "geofence_check",
-                ExistingPeriodicWorkPolicy.UPDATE,
-                workRequest
-            )
-        }
+        if (familyId != null) GeofenceWorker.schedule(context)
     }
 
     if (onboardingPending == null) {
