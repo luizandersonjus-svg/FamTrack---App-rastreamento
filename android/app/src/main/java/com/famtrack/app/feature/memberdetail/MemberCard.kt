@@ -1,7 +1,10 @@
 package com.famtrack.app.feature.memberdetail
 
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,10 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.BatteryStd
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -22,7 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,7 +35,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -86,7 +94,11 @@ fun batteryIcon(level: Int): ImageVector {
 fun MemberCard(
     info: MemberCardInfo,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Toque no avatar: centraliza o mapa no membro (o restante do card abre o detalhe).
+    onAvatarClick: (() -> Unit)? = null,
+    // Destaca o card do membro que o mapa está seguindo.
+    highlighted: Boolean = false
 ) {
     val context = LocalContext.current
     val waitingFirstUpdate = !info.sharingPaused && info.lastUpdatedMillis == null
@@ -98,6 +110,11 @@ fun MemberCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
+        border = if (highlighted) {
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
@@ -106,11 +123,20 @@ fun MemberCard(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            MemberInitialsAvatar(
-                name = info.displayName,
-                avatarUrl = info.avatarUrl,
-                modifier = Modifier.size(44.dp)
-            )
+            if (onAvatarClick != null) {
+                MemberFocusAvatar(
+                    name = info.displayName,
+                    avatarUrl = info.avatarUrl,
+                    focused = highlighted,
+                    onClick = onAvatarClick
+                )
+            } else {
+                MemberInitialsAvatar(
+                    name = info.displayName,
+                    avatarUrl = info.avatarUrl,
+                    modifier = Modifier.size(44.dp)
+                )
+            }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -242,6 +268,63 @@ fun MemberInitialsAvatar(
                     color = MaterialTheme.colorScheme.primary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Avatar tocável que leva o mapa até o membro. Um pequeno selo de "localizar"
+ * no canto indica que o toque centraliza o mapa; quando o mapa está seguindo
+ * este membro, o avatar ganha um anel na cor primária.
+ */
+@Composable
+fun MemberFocusAvatar(
+    name: String,
+    avatarUrl: String?,
+    focused: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    size: Dp = 44.dp
+) {
+    val label = stringResource(R.string.home_focus_member_cd, name)
+    Box(
+        modifier = modifier
+            // Área de toque mínima de 48dp, mesmo com avatar menor.
+            .size(maxOf(size, 48.dp))
+            .clip(CircleShape)
+            .clickable(onClickLabel = label, role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(modifier = Modifier.size(size)) {
+            MemberInitialsAvatar(
+                name = name,
+                avatarUrl = avatarUrl,
+                modifier = Modifier
+                    .matchParentSize()
+                    .then(
+                        if (focused) {
+                            Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
+                        } else {
+                            Modifier
+                        }
+                    )
+            )
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.surface),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(18.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.MyLocation,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.padding(3.dp)
                 )
             }
         }
