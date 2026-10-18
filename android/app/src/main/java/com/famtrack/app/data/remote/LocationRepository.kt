@@ -15,6 +15,8 @@ import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
 import io.github.jan.supabase.realtime.realtime
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -89,13 +91,18 @@ class LocationRepository {
         while (currentCoroutineContext().isActive) {
             val channel = client.channel("locations-$familyId")
             try {
-                channel.subscribe()
-
-                channel
+                // O postgresChangeFlow precisa ser criado ANTES do subscribe():
+                // o join do canal envia ao servidor só as assinaturas já
+                // registradas. Na ordem inversa o canal entra sem
+                // postgres_changes e nenhum evento chega.
+                val changes = channel
                     .postgresChangeFlow<PostgresAction>(schema = "public") {
                         table = "locations"
                         filter("family_id", FilterOperator.EQ, familyId)
                     }
+                channel.subscribe()
+
+                changes
                     .collect { action ->
                         when (action) {
                             is PostgresAction.Insert -> emit(
@@ -113,7 +120,9 @@ class LocationRepository {
                 Log.e(TAG, "Erro no canal realtime de locations", e)
             } finally {
                 try {
-                    client.realtime.removeChannel(channel)
+                    // NonCancellable: ao sair da Home o coletor é cancelado e uma
+                    // chamada suspensa no finally falharia sem remover o canal.
+                    withContext(NonCancellable) { client.realtime.removeChannel(channel) }
                 } catch (_: Exception) {
                     // Ignora erro ao limpar canal morto.
                 }
