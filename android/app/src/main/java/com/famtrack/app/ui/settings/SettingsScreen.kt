@@ -1,6 +1,7 @@
 package com.famtrack.app.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -8,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
@@ -28,6 +30,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import coil.compose.AsyncImage
 import com.famtrack.app.R
 import com.famtrack.app.data.remote.FamilyRepository
@@ -35,12 +38,15 @@ import com.famtrack.app.data.remote.HealthConnectRepository
 import com.famtrack.app.data.remote.HeartRateSummary
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.data.session.SessionCleanup
+import com.famtrack.app.feature.healthsnap.HealthPrivacyPolicyActivity
 import com.famtrack.app.feature.healthsnap.HealthSnapRepository
+import com.famtrack.app.feature.onboarding.BatteryOptimization
 import com.famtrack.app.feature.privacy.PrivacyPrefs
 import com.famtrack.app.feature.privacy.PrivacyRepository
 import com.famtrack.app.ui.history.readSpeedAlertPref
 import com.famtrack.app.ui.history.speedAlertFlow
 import com.famtrack.app.ui.history.writeSpeedAlertPref
+import com.famtrack.app.util.StepPermission
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
 
@@ -72,6 +78,35 @@ fun SettingsScreen(
     var privacySaving by remember { mutableStateOf(false) }
     var privacyUserId by remember { mutableStateOf<String?>(null) }
     var privacyFamilyId by remember { mutableStateOf<String?>(null) }
+
+    // Contagem de passos (permissão "Atividade física", Android 10+). Quem já
+    // passou pelo onboarding antes desta etapa existir ativa por aqui.
+    var stepsGranted by remember { mutableStateOf(StepPermission.isGranted(context)) }
+    var stepsDeniedOnce by remember { mutableStateOf(false) }
+    // Revalida ao voltar dos ajustes do Android (o usuário pode ter mudado lá).
+    LifecycleResumeEffect(Unit) {
+        stepsGranted = StepPermission.isGranted(context)
+        onPauseOrDispose { }
+    }
+    val stepsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        stepsGranted = granted
+        if (granted) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.settings_steps_granted_toast),
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            stepsDeniedOnce = true
+            Toast.makeText(
+                context,
+                context.getString(R.string.settings_steps_denied_toast),
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     // Conta logada no momento (nome do Google/salto, e-mail)
     val currentUser = remember {
@@ -357,6 +392,26 @@ fun SettingsScreen(
                             }
                         }
                     )
+                    if (StepPermission.isRuntimePermission) {
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        SettingsItem(
+                            icon = Icons.AutoMirrored.Filled.DirectionsWalk,
+                            title = stringResource(R.string.settings_steps_title),
+                            subtitle = stringResource(
+                                if (stepsGranted) R.string.settings_steps_on
+                                else R.string.settings_steps_off
+                            ),
+                            onClick = {
+                                // Já ativada (para quem quiser desligar) ou recusada antes
+                                // (o Android pode não perguntar mais): abre os ajustes do app.
+                                if (stepsGranted || stepsDeniedOnce) {
+                                    BatteryOptimization.openAppSettings(context)
+                                } else {
+                                    stepsPermissionLauncher.launch(StepPermission.PERMISSION)
+                                }
+                            }
+                        )
+                    }
                 }
             }
 
@@ -986,6 +1041,12 @@ fun DevicesDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                TextButton(
+                    onClick = { HealthPrivacyPolicyActivity.open(context) },
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+                ) {
+                    Text(stringResource(R.string.health_privacy_link))
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 when {
                     checking -> {

@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -26,16 +27,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import com.famtrack.app.R
+import com.famtrack.app.util.StepPermission
 import kotlinx.coroutines.launch
 
 private enum class OnboardingStep {
-    EXPLAIN, LOCATION, BACKGROUND, NOTIFICATIONS, BATTERY, DONE
+    EXPLAIN, LOCATION, BACKGROUND, NOTIFICATIONS, ACTIVITY, BATTERY, DONE
 }
 
 /**
  * Onboarding de permissões exibido uma única vez após o login.
  * Fluxo: explicação -> localização (FINE/COARSE) -> segundo plano (Android 10+) ->
- * notificações (Android 13+) -> otimização de bateria. Nunca bloqueia o app.
+ * notificações (Android 13+) -> atividade física / passos (Android 10+) ->
+ * otimização de bateria. Nunca bloqueia o app: toda etapa pode ser pulada.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,12 +52,24 @@ fun OnboardingScreen(
     var hasFine by remember { mutableStateOf(false) }
     var hasBackground by remember { mutableStateOf(false) }
     var hasNotification by remember { mutableStateOf(false) }
+    var hasActivity by remember { mutableStateOf(StepPermission.isGranted(context)) }
+    // Já pedimos "Atividade física" nesta tela? Depois de uma recusa, "Continuar"
+    // apenas avança (o Android pode negar sozinho após duas recusas).
+    var activityAsked by remember { mutableStateOf(false) }
     var deniedNote by remember { mutableStateOf<String?>(null) }
 
     fun advanceTo(next: OnboardingStep) {
         deniedNote = null
         step = next
     }
+
+    // Etapa de passos só existe no Android 10+ e quando ainda falta a permissão.
+    fun stepAfterNotifications(): OnboardingStep =
+        if (StepPermission.isRuntimePermission && !StepPermission.isGranted(context)) {
+            OnboardingStep.ACTIVITY
+        } else {
+            OnboardingStep.BATTERY
+        }
 
     val fineLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -79,6 +94,18 @@ fun OnboardingScreen(
         hasNotification = result[Manifest.permission.POST_NOTIFICATIONS] == true
         deniedNote = if (hasNotification) null
         else context.getString(R.string.onboarding_notifications_denied)
+    }
+
+    val activityLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasActivity = granted
+        activityAsked = true
+        if (granted) {
+            advanceTo(OnboardingStep.BATTERY)
+        } else {
+            deniedNote = context.getString(R.string.onboarding_activity_denied)
+        }
     }
 
     fun continueButton() {
@@ -114,9 +141,16 @@ fun OnboardingScreen(
             }
             OnboardingStep.NOTIFICATIONS -> {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || hasNotification) {
-                    advanceTo(OnboardingStep.BATTERY)
+                    advanceTo(stepAfterNotifications())
                 } else {
                     notificationLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                }
+            }
+            OnboardingStep.ACTIVITY -> {
+                if (!StepPermission.isRuntimePermission || hasActivity || activityAsked) {
+                    advanceTo(OnboardingStep.BATTERY)
+                } else {
+                    activityLauncher.launch(StepPermission.PERMISSION)
                 }
             }
             OnboardingStep.BATTERY, OnboardingStep.DONE -> {
@@ -156,6 +190,11 @@ fun OnboardingScreen(
             icon = Icons.Filled.NotificationsActive,
             title = context.getString(R.string.onboarding_notifications_title),
             text = context.getString(R.string.onboarding_notifications_text)
+        )
+        OnboardingStep.ACTIVITY -> StepContent(
+            icon = Icons.AutoMirrored.Filled.DirectionsWalk,
+            title = context.getString(R.string.onboarding_activity_title),
+            text = context.getString(R.string.onboarding_activity_text)
         )
         OnboardingStep.BATTERY -> StepContent(
             icon = Icons.Filled.Settings,
@@ -278,6 +317,9 @@ fun OnboardingScreen(
                             OnboardingStep.EXPLAIN -> context.getString(R.string.onboarding_btn_start)
                             OnboardingStep.BATTERY, OnboardingStep.DONE ->
                                 context.getString(R.string.onboarding_btn_finish)
+                            OnboardingStep.ACTIVITY ->
+                                if (activityAsked) context.getString(R.string.onboarding_btn_continue)
+                                else context.getString(R.string.onboarding_activity_allow)
                             else -> context.getString(R.string.onboarding_btn_continue)
                         },
                         fontSize = 16.sp
@@ -336,6 +378,24 @@ fun OnboardingScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(context.getString(R.string.onboarding_btn_open_settings))
+                            }
+                            // Após recusar, o Android pode negar sozinho nas próximas
+                            // vezes: sem "Pular" o usuário ficava preso nesta etapa.
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(
+                                onClick = { advanceTo(stepAfterNotifications()) }
+                            ) {
+                                Text(context.getString(R.string.onboarding_btn_skip))
+                            }
+                        }
+                    }
+                    OnboardingStep.ACTIVITY -> {
+                        if (!activityAsked) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            TextButton(
+                                onClick = { advanceTo(OnboardingStep.BATTERY) }
+                            ) {
+                                Text(context.getString(R.string.onboarding_btn_skip))
                             }
                         }
                     }
