@@ -103,8 +103,24 @@ import java.util.concurrent.TimeUnit
 private const val MAX_SOS_ACCURACY_METERS = 250.0
 private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
-// Zoom mínimo ao focar um membro pelo avatar (nível de rua).
-private const val MEMBER_FOCUS_ZOOM = 16f
+// Zoom padrão "nível de rua" (antes 15, ~3x mais longe): 16.5 mostra o nome
+// das ruas do bairro e ainda uns 3–4 quarteirões em volta, então quem está
+// perto continua aparecendo. Aplicado só ao abrir o app, no botão "Minha
+// localização" e no SOS — entre um fix e outro o zoom escolhido na pinça fica.
+private const val DEFAULT_STREET_ZOOM = 16.5f
+// Zoom mínimo ao focar um membro pelo avatar: o mesmo nível de rua.
+private const val MEMBER_FOCUS_ZOOM = DEFAULT_STREET_ZOOM
+// Último fix salvo mais velho que isto pode ser de outro lugar (viagem): a
+// câmera nasce num zoom de cidade até chegar uma posição nova.
+private const val STALE_START_FIX_MS = 6 * 60 * 60_000L
+private const val CITY_ZOOM = 12f
+// Sem nenhum fix salvo (1º uso): Brasil inteiro, em vez do (0,0) no Atlântico.
+private const val FALLBACK_START_LAT = -14.235
+private const val FALLBACK_START_LON = -51.925
+private const val FALLBACK_START_ZOOM = 3.5f
+// Seguindo a si mesmo: arrastar o mapa a mais que isto (dp) da própria
+// posição solta a câmera; pinçar/arrastar pouco mantém o "seguir".
+private const val SELF_FOLLOW_RELEASE_DP = 80f
 // Quantos avatares cabem na barra recolhida de membros antes do "+N".
 private const val BAR_MAX_AVATARS = 3
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
@@ -270,7 +286,6 @@ fun HomeScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     var membersPanelExpanded by remember { mutableStateOf(false) }
     var layersSheetOpen by remember { mutableStateOf(false) }
-    var skipNextCameraFollow by remember { mutableStateOf(false) }
     // Foco em membro: ao tocar no avatar de outro membro, o mapa voa até ele e
     // passa a segui-lo (em vez de seguir o próprio usuário). Arrastar o mapa
     // solta o foco e deixa a câmera livre até "Minha localização" ser tocado.
@@ -317,7 +332,13 @@ fun HomeScreen(
 
     val tabs = listOf("Mapa", "Histórico", "Alertas", "Configurações")
 
-    val cameraPositionState = rememberCameraPositionState()
+    // A câmera já nasce na última posição conhecida (LocationFixStore), sem o
+    // "voo" a partir do (0,0) enquanto o GPS não responde. É salva entre telas
+    // (rememberSaveable por dentro): voltar das Configurações não a reposiciona.
+    val cameraPositionState = rememberCameraPositionState {
+        position = initialCameraPosition(LocationFixStore.load(context))
+    }
+    val cameraSession = com.famtrack.app.util.MapCameraSession
 
     // Callback do FLP da própria tela. Antes nunca era removido: cada entrada
     // na Home registrava mais um (alta precisão, 3s), que seguia vivo em
@@ -345,6 +366,21 @@ fun HomeScreen(
             currentLocation = Pair(fix.latitude, fix.longitude)
             currentFix = fix
             LocationFixStore.save(context, fix)
+        }
+        // Fonte rápida enquanto o 1º fix novo não chega: o último local do FLP
+        // (mantido quente pelo LocationService) costuma responder em ms. Só
+        // posiciona a câmera — o fix novo confirma a centralização de abertura.
+        seedCameraFromLastLocation(context) { location ->
+            if (currentLocation == null &&
+                cameraSession.isOpenCenteringPending() &&
+                followedMemberId == null &&
+                System.currentTimeMillis() - location.time <= STALE_START_FIX_MS
+            ) {
+                cameraPositionState.position = cameraPositionAt(
+                    cameraPositionState.position, location.latitude, location.longitude,
+                    DEFAULT_STREET_ZOOM
+                )
+            }
         }
     }
 
@@ -424,36 +460,47 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(currentLocation) {
-        if (skipNextCameraFollow) {
-            skipNextCameraFollow = false
-        } else if (followedMemberId != null || cameraFree) {
-            // Seguindo outro membro (ou câmera solta pelo usuário): não volta
-            // para a própria posição a cada fix.
-        } else {
-            currentLocation?.let { (lat, lon) ->
-                cameraPositionState.animate(
-                    CameraUpdateFactory.newLatLngZoom(
-                        com.google.android.gms.maps.model.LatLng(lat, lon),
-                        15f
-                    ),
-                    1000
-                )
-            }
+    // Clique na notificação de SOS: centraliza o mapa no alerta. Consome a cada
+    // volta ao foreground (MainActivity.onResume), inclusive com a Home já
+    // aberta. Solta a câmera (cameraFree) para o próximo fix não puxar o mapa
+    // de volta ao usuário; "Minha localização" retoma o seguir.
+    // Declarado ANTES do seguir a própria posição: na mesma volta ao app, o SOS
+    // marca a abertura como feita antes de a centralização de abertura rodar.
+    val foregroundTick by cameraSession.foregroundTicks.collectAsState()
+    LaunchedEffect(foregroundTick) {
+        SosDeepLink.consume()?.let { (lat, lon) ->
+            followedMemberId = null
+            cameraFree = true
+            cameraSession.markOpenCenteringDone()
+            moveCameraTo(cameraPositionState, lat, lon, DEFAULT_STREET_ZOOM, 1000)
         }
     }
-    // Clique na notificação de SOS: centraliza o mapa no alerta uma única vez.
-    LaunchedEffect(Unit) {
-        SosDeepLink.consume()?.let { (lat, lon) ->
-            skipNextCameraFollow = true
-            cameraPositionState.animate(
-                CameraUpdateFactory.newLatLngZoom(
-                    com.google.android.gms.maps.model.LatLng(lat, lon),
-                    15f
-                ),
-                1000
+    // Gesto do usuário em andamento enquanto segue a própria posição: os fixes
+    // não mexem na câmera até o dedo soltar (não briga com o arrastar/pinçar).
+    var selfGestureActive by remember { mutableStateOf(false) }
+    var gestureStartTarget by remember {
+        mutableStateOf<com.google.android.gms.maps.model.LatLng?>(null)
+    }
+    val openCenteringPending by cameraSession.openCenteringPending.collectAsState()
+    LaunchedEffect(currentLocation, openCenteringPending) {
+        val (lat, lon) = currentLocation ?: return@LaunchedEffect
+        if (cameraSession.isOpenCenteringPending()) {
+            // App acabou de abrir (ou voltou do background): abre direto no
+            // usuário, no zoom de rua — salto instantâneo, sem voo pelo mapa.
+            cameraSession.markOpenCenteringDone()
+            // Seguindo outro membro: respeita o foco escolhido.
+            if (followedMemberId != null) return@LaunchedEffect
+            cameraFree = false
+            cameraPositionState.position = cameraPositionAt(
+                cameraPositionState.position, lat, lon, DEFAULT_STREET_ZOOM
             )
+            return@LaunchedEffect
         }
+        // Seguindo outro membro, câmera solta pelo usuário ou dedo no mapa:
+        // não volta para a própria posição a cada fix.
+        if (followedMemberId != null || cameraFree || selfGestureActive) return@LaunchedEffect
+        // Seguindo a si mesmo: só reposiciona, mantendo o zoom escolhido na pinça.
+        moveCameraTo(cameraPositionState, lat, lon, zoom = null, animateMs = 600)
     }
     // Foco em membro — posição atual do membro seguido (atualizada pelo Realtime).
     val followedTarget: Pair<Double, Double>? = followedMemberId?.let { id ->
@@ -477,27 +524,56 @@ fun HomeScreen(
         }
         cameraPositionState.animate(update, 900)
     }
-    // Arrastar/pinçar o mapa solta o foco: o usuário quer olhar em volta.
-    LaunchedEffect(cameraPositionState.isMoving) {
-        if (cameraPositionState.isMoving &&
-            cameraPositionState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE &&
-            followedMemberId != null
-        ) {
-            followedMemberId = null
-            cameraFree = true
+    // Gestos no mapa. A chave inclui o motivo: um gesto que interrompe uma
+    // animação nossa troca o motivo sem isMoving voltar a false.
+    // - Seguindo outro membro: arrastar/pinçar solta o foco (olhar em volta).
+    // - Seguindo a si mesmo: ao soltar o dedo, se a própria posição ficou longe
+    //   do centro (arrastou o mapa), a câmera fica livre até "Minha
+    //   localização"; pinçar ou arrastar pouco continua seguindo.
+    LaunchedEffect(cameraPositionState.isMoving, cameraPositionState.cameraMoveStartedReason) {
+        val byGesture =
+            cameraPositionState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE
+        if (cameraPositionState.isMoving) {
+            if (!byGesture) return@LaunchedEffect
+            if (followedMemberId != null) {
+                followedMemberId = null
+                cameraFree = true
+            } else if (!cameraFree && !selfGestureActive) {
+                selfGestureActive = true
+                gestureStartTarget = cameraPositionState.position.target
+            }
+        } else if (selfGestureActive) {
+            selfGestureActive = false
+            val anchor = currentLocation
+                ?.let { (lat, lon) -> com.google.android.gms.maps.model.LatLng(lat, lon) }
+                ?: gestureStartTarget
+            gestureStartTarget = null
+            val projection = cameraPositionState.projection
+            if (anchor != null && projection != null && !cameraFree && followedMemberId == null) {
+                val p = projection.toScreenLocation(anchor)
+                val c = projection.toScreenLocation(cameraPositionState.position.target)
+                val distPx = Math.hypot((p.x - c.x).toDouble(), (p.y - c.y).toDouble())
+                if (distPx > SELF_FOLLOW_RELEASE_DP * context.resources.displayMetrics.density) {
+                    cameraFree = true
+                    // Explorou o mapa antes do 1º fix: não puxa de volta ao chegar.
+                    cameraSession.markOpenCenteringDone()
+                }
+            }
         }
     }
-    // Volta a seguir a própria posição (botão "Minha localização" ou o próprio avatar).
+    // Volta a seguir a própria posição (botão "Minha localização" ou o próprio
+    // avatar): zoom de rua (ou mais perto, se o usuário já estava mais perto).
     val focusSelf: () -> Unit = {
         followedMemberId = null
         cameraFree = false
-        currentLocation?.let { (lat, lon) ->
+        cameraSession.markOpenCenteringDone()
+        val target = currentLocation
+            ?: LocationFixStore.load(context)?.let { it.latitude to it.longitude }
+        target?.let { (lat, lon) ->
             scope.launch {
-                cameraPositionState.animate(
-                    CameraUpdateFactory.newLatLngZoom(
-                        com.google.android.gms.maps.model.LatLng(lat, lon),
-                        15f
-                    ),
+                moveCameraTo(
+                    cameraPositionState, lat, lon,
+                    maxOf(cameraPositionState.position.zoom, DEFAULT_STREET_ZOOM),
                     500
                 )
             }
@@ -2081,6 +2157,88 @@ private fun startSharingService(
         ) == PackageManager.PERMISSION_GRANTED
     ) {
         LocationService.startService(context, familyId, userId)
+    }
+}
+
+/**
+ * Posição inicial da câmera ao montar a Home: último fix salvo no zoom de rua;
+ * fix velho (pode ser de outra cidade) num zoom de cidade; sem fix, o Brasil.
+ */
+private fun initialCameraPosition(
+    lastFix: SosFix?
+): com.google.android.gms.maps.model.CameraPosition {
+    if (lastFix == null) {
+        return com.google.android.gms.maps.model.CameraPosition.fromLatLngZoom(
+            com.google.android.gms.maps.model.LatLng(FALLBACK_START_LAT, FALLBACK_START_LON),
+            FALLBACK_START_ZOOM
+        )
+    }
+    val ageMs = System.currentTimeMillis() - lastFix.fixAtMillis
+    val zoom = if (ageMs in 0..STALE_START_FIX_MS) DEFAULT_STREET_ZOOM else CITY_ZOOM
+    return com.google.android.gms.maps.model.CameraPosition.fromLatLngZoom(
+        com.google.android.gms.maps.model.LatLng(lastFix.latitude, lastFix.longitude),
+        zoom
+    )
+}
+
+/** Mesma câmera (inclinação/rotação) apontada para (lat, lon) no zoom dado. */
+private fun cameraPositionAt(
+    current: com.google.android.gms.maps.model.CameraPosition,
+    lat: Double,
+    lon: Double,
+    zoom: Float
+): com.google.android.gms.maps.model.CameraPosition =
+    com.google.android.gms.maps.model.CameraPosition.Builder(current)
+        .target(com.google.android.gms.maps.model.LatLng(lat, lon))
+        .zoom(zoom)
+        .build()
+
+/**
+ * Leva a câmera até (lat, lon). Destino já visível na tela: animação curta.
+ * Fora da tela (ou mapa ainda não carregado): salto direto — nada de voo longo
+ * atravessando o mapa. zoom == null mantém o zoom atual (o da pinça).
+ * O salto usa o setter de position, seguro mesmo antes de o mapa existir.
+ */
+private suspend fun moveCameraTo(
+    state: CameraPositionState,
+    lat: Double,
+    lon: Double,
+    zoom: Float?,
+    animateMs: Int
+) {
+    val target = com.google.android.gms.maps.model.LatLng(lat, lon)
+    val visible = state.projection?.visibleRegion?.latLngBounds?.contains(target) == true
+    if (visible) {
+        val update = if (zoom != null) {
+            CameraUpdateFactory.newLatLngZoom(target, zoom)
+        } else {
+            CameraUpdateFactory.newLatLng(target)
+        }
+        state.animate(update, animateMs)
+    } else {
+        state.position = cameraPositionAt(state.position, lat, lon, zoom ?: state.position.zoom)
+    }
+}
+
+/** Último local conhecido do FLP (rápido, sem ligar o GPS); ignora se não houver. */
+private fun seedCameraFromLastLocation(
+    context: Context,
+    onLocation: (Location) -> Unit
+) {
+    val granted = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    if (!granted) return
+    try {
+        LocationServices.getFusedLocationProviderClient(context).lastLocation
+            .addOnSuccessListener { location ->
+                if (location != null) onLocation(location)
+            }
+    } catch (e: SecurityException) {
+        Log.w("FamTrackCamera", "lastLocation sem permissão: ${e.localizedMessage?.take(80)}")
     }
 }
 
