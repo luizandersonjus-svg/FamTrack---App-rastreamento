@@ -103,11 +103,11 @@ import java.util.concurrent.TimeUnit
 private const val MAX_SOS_ACCURACY_METERS = 250.0
 private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
-// Zoom padrão "nível de rua" (antes 15, ~3x mais longe): 16.5 mostra o nome
-// das ruas do bairro e ainda uns 3–4 quarteirões em volta, então quem está
-// perto continua aparecendo. Aplicado só ao abrir o app, no botão "Minha
-// localização" e no SOS — entre um fix e outro o zoom escolhido na pinça fica.
-private const val DEFAULT_STREET_ZOOM = 16.5f
+// Zoom padrão "nível de rua" (antes 16.5, ainda longe demais no celular):
+// 17.5 mostra o quarteirão e as ruas vizinhas com nome legível. Aplicado só ao
+// abrir o app, no botão "Minha localização" e no SOS — entre um fix e outro o
+// zoom escolhido na pinça fica.
+private const val DEFAULT_STREET_ZOOM = 17.5f
 // Zoom mínimo ao focar um membro pelo avatar: o mesmo nível de rua.
 private const val MEMBER_FOCUS_ZOOM = DEFAULT_STREET_ZOOM
 // Último fix salvo mais velho que isto pode ser de outro lugar (viagem): a
@@ -123,6 +123,9 @@ private const val FALLBACK_START_ZOOM = 3.5f
 private const val SELF_FOLLOW_RELEASE_DP = 80f
 // Fix salvo com até esta idade é usado como posição inicial ao recriar a Home.
 private const val RECENT_FIX_SEED_MS = 2 * 60_000L
+// Último local do FLP (ou fix rápido por Wi-Fi/rede) com até esta idade libera
+// o mapa na hora, sem esperar o GPS de alta precisão.
+private const val LAST_LOCATION_SEED_MS = 10 * 60_000L
 // Quantos avatares cabem na barra recolhida de membros antes do "+N".
 private const val BAR_MAX_AVATARS = 3
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
@@ -381,13 +384,17 @@ fun HomeScreen(
             LocationFixStore.save(context, fix)
         }
         // Fonte rápida enquanto o 1º fix novo não chega: o último local do FLP
-        // (mantido quente pelo LocationService) costuma responder em ms. Só
-        // posiciona a câmera — o fix novo confirma a centralização de abertura.
+        // (mantido quente pelo LocationService) costuma responder em ms. Se for
+        // recente, já libera o mapa (sai do "Obtendo localização…") — o fix novo
+        // refina a posição. Se for antigo, só posiciona a câmera.
         seedCameraFromLastLocation(context) { location ->
-            if (currentLocation == null &&
+            val ageMs = System.currentTimeMillis() - location.time
+            if (currentLocation == null && ageMs in 0..LAST_LOCATION_SEED_MS) {
+                currentLocation = Pair(location.latitude, location.longitude)
+            } else if (currentLocation == null &&
                 cameraSession.isOpenCenteringPending() &&
                 followedMemberId == null &&
-                System.currentTimeMillis() - location.time <= STALE_START_FIX_MS
+                ageMs <= STALE_START_FIX_MS
             ) {
                 cameraPositionState.position = cameraPositionAt(
                     cameraPositionState.position, location.latitude, location.longitude,
@@ -2354,7 +2361,11 @@ private suspend fun moveCameraTo(
     }
 }
 
-/** Último local conhecido do FLP (rápido, sem ligar o GPS); ignora se não houver. */
+/**
+ * Último local conhecido do FLP (rápido, sem ligar o GPS). Sem cache (aparelho
+ * recém-ligado, GPS desligado há tempo), pede um fix único de precisão
+ * equilibrada (Wi-Fi/rede), que responde em segundos mesmo em local fechado.
+ */
 private fun seedCameraFromLastLocation(
     context: Context,
     onLocation: (Location) -> Unit
@@ -2367,9 +2378,19 @@ private fun seedCameraFromLastLocation(
         ) == PackageManager.PERMISSION_GRANTED
     if (!granted) return
     try {
-        LocationServices.getFusedLocationProviderClient(context).lastLocation
+        val client = LocationServices.getFusedLocationProviderClient(context)
+        client.lastLocation
             .addOnSuccessListener { location ->
-                if (location != null) onLocation(location)
+                if (location != null) {
+                    onLocation(location)
+                } else {
+                    try {
+                        client.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, null)
+                            .addOnSuccessListener { current -> if (current != null) onLocation(current) }
+                    } catch (e: SecurityException) {
+                        Log.w("FamTrackCamera", "getCurrentLocation sem permissão: ${e.localizedMessage?.take(80)}")
+                    }
+                }
             }
     } catch (e: SecurityException) {
         Log.w("FamTrackCamera", "lastLocation sem permissão: ${e.localizedMessage?.take(80)}")
@@ -2398,7 +2419,10 @@ private fun startLocationUpdates(
     ).apply {
         setMinUpdateDistanceMeters(5f)
         setGranularity(Granularity.GRANULARITY_PERMISSION_LEVEL)
-        setWaitForAccurateLocation(true)
+        // Sem waitForAccurateLocation: com ele o FLP segurava o 1º fix até o GPS
+        // ficar preciso — em local fechado, um minuto ou mais em "Obtendo…".
+        // Fixes iniciais menos precisos chegam logo e são refinados a cada 3 s.
+        setWaitForAccurateLocation(false)
     }.build()
 
     val locationCallback = object : LocationCallback() {
