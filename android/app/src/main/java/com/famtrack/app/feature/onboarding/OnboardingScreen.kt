@@ -105,8 +105,10 @@ fun OnboardingScreen(
                     }
                     else -> {
                         BatteryOptimization.openAppSettings(context)
-                        deniedNote = context.getString(R.string.onboarding_background_settings_hint)
+                        // advanceTo() limpa deniedNote: a dica precisa ser definida
+                        // DEPOIS, senão nunca era exibida.
                         advanceTo(OnboardingStep.NOTIFICATIONS)
+                        deniedNote = context.getString(R.string.onboarding_background_settings_hint)
                     }
                 }
             }

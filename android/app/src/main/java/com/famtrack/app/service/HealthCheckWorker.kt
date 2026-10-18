@@ -64,7 +64,15 @@ class HealthCheckWorker(
         } else {
             Log.w(TAG, "watchdog: serviço sem fix há ${stopped / 1000}s; religando tracking")
         }
-        LocationService.startService(context, ids.first, ids.second)
+        // Android 12+: iniciar serviço em foreground a partir do worker (app em
+        // segundo plano) lança ForegroundServiceStartNotAllowedException. Antes
+        // a exceção escapava daqui e pulava também o Telemetry.post().
+        try {
+            LocationService.startService(context, ids.first, ids.second)
+        } catch (e: Exception) {
+            Log.w(TAG, "watchdog: não foi possível religar o serviço (${e.javaClass.simpleName})")
+            return
+        }
         notifyRestart(context)
     }
 

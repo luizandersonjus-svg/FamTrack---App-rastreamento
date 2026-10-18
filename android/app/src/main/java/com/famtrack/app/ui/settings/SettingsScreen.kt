@@ -99,12 +99,26 @@ fun SettingsScreen(
                 privacyUserId = user.id
                 val member = FamilyRepository().getUserFamily(user.id)
                 privacyFamilyId = member?.family_id
+                // A pausa é aplicada pela preferência LOCAL (LocationService lê
+                // privacy_prefs). Antes a chave exibia o valor do servidor sem
+                // sincronizar o local: podia mostrar "pausado" enquanto o
+                // aparelho seguia enviando. Reconcilia para o lado seguro
+                // (pausado se qualquer um dos dois estiver pausado).
+                val localPaused = PrivacyPrefs.isSharingPaused(context)
                 val flags = privacyRepository.getMyFlags(user.id)
-                sharingPaused = flags?.sharing_paused ?: PrivacyPrefs.isSharingPaused(context)
+                val paused = localPaused || flags?.sharing_paused == true
+                sharingPaused = paused
+                if (paused != localPaused) PrivacyPrefs.setSharingPaused(context, paused)
+                if (flags != null && flags.sharing_paused != paused) {
+                    try {
+                        privacyRepository.setSharingPaused(user.id, paused)
+                    } catch (_: Exception) { }
+                }
                 shareHealth = flags?.share_health ?: PrivacyPrefs.isSharingHealth(context)
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            sharingPaused = PrivacyPrefs.isSharingPaused(context)
         } finally {
             privacyLoading = false
         }

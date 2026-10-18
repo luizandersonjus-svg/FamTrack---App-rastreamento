@@ -102,6 +102,13 @@ class LocationService : Service() {
     private var stationarySince = 0L
     private var isStationary = false
 
+    // Âncora própria da detecção de movimento. Antes usava a âncora do feed
+    // (lastFeedLat/Lng), que só avança quando o envio ao Supabase dá certo:
+    // com compartilhamento pausado ou sem rede, depois de andar >20 m todo fix
+    // parecia "movimento" e o GPS ficava preso no modo denso (3 s, alta precisão).
+    private var motionAnchorLat: Double? = null
+    private var motionAnchorLng: Double? = null
+
     private val fixHeartbeatHandler by lazy { Handler(Looper.getMainLooper()) }
     private val fixHeartbeatRunnable = Runnable { checkFixHeartbeat() }
 
@@ -216,15 +223,32 @@ class LocationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun start() {
-        try {
-            if (trackingStarted) {
-                // Já em tracking: apenas reafirma o foreground (evita registrar updates 2x).
+        if (trackingStarted) {
+            // Já em tracking: apenas reafirma o foreground (evita registrar updates 2x).
+            try {
                 startFg()
-                return
+                // Se o FLP não chegou a ser registrado (ex.: sem permissão no
+                // primeiro start), tenta de novo; é idempotente.
+                if (locationCallback == null) startLocationUpdates()
+            } catch (e: Exception) {
+                Log.e(TAG, "Falha ao reafirmar foreground: ${e.localizedMessage}")
             }
-            trackingStarted = true
-            // Foreground obrigatório ANTES de qualquer operação de localização/rede.
+            return
+        }
+        // Foreground obrigatório ANTES de qualquer operação de localização/rede.
+        // Se o sistema recusar (ex.: Android 14+ iniciando o tipo "location" em
+        // segundo plano sem permissão de localização em background), encerra em
+        // vez de deixar trackingStarted=true sem FLP registrado — antes isso
+        // fazia todo ACTION_START seguinte cair no ramo "já em tracking".
+        try {
             startFg()
+        } catch (e: Exception) {
+            Log.e(TAG, "Foreground recusado; encerrando serviço: ${e.localizedMessage}")
+            stopSelf()
+            return
+        }
+        trackingStarted = true
+        try {
             // ETAPA 7 — observabilidade: batimento reforçado ao iniciar o tracking.
             Telemetry.heartbeat(applicationContext)
             // Restaura a âncora persistida para o usuário/família atuais (sobrevive
@@ -239,6 +263,8 @@ class LocationService : Service() {
         } catch (e: Exception) {
             // Hibernação/retomada: nunca deixe a inicialização derrubar o serviço.
             Log.e(TAG, "Erro protegido ao iniciar tracking: ${e.localizedMessage}")
+            // Sem FLP registrado, o próximo ACTION_START precisa refazer tudo.
+            if (locationCallback == null) trackingStarted = false
         }
     }
 
@@ -314,11 +340,10 @@ class LocationService : Service() {
         }
         val locationRequest = buildLocationRequest()
 
-        if (ContextCompat.checkSelfPermission(
-                this,
-                android.Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+        // FINE ou COARSE: com "localização aproximada" (Android 12+) o FLP
+        // entrega fixes aproximados (GRANULARITY_PERMISSION_LEVEL). Antes só
+        // FINE era aceito e o serviço ficava em foreground sem rastrear nada.
+        if (!locationPermissionGranted(this)) {
             Log.e(TAG, "Permissão de localização ausente; updates não registrados")
             return
         }
@@ -461,8 +486,8 @@ result.lastLocation?.let { location ->
     /** O fix atual indica movimento (velocidade reportada ou deslocamento real). */
     private fun isMoving(location: Location): Boolean {
         if (location.hasSpeed() && location.speed > ADAPTIVE_STILL_SPEED_MS) return true
-        val lat = lastFeedLat ?: return false
-        val lng = lastFeedLng ?: return false
+        val lat = motionAnchorLat ?: return false
+        val lng = motionAnchorLng ?: return false
         val dist = FloatArray(1)
         Location.distanceBetween(lat, lng, location.latitude, location.longitude, dist)
         return dist[0] > ADAPTIVE_STILL_RADIUS_M
@@ -474,7 +499,14 @@ result.lastLocation?.let { location ->
      * primeiro fix com movimento. O FLP é (re)registrado apenas nas transições.
      */
     private fun updateAdaptiveMode(location: Location) {
+        if (motionAnchorLat == null || motionAnchorLng == null) {
+            motionAnchorLat = location.latitude
+            motionAnchorLng = location.longitude
+        }
         if (isMoving(location)) {
+            // Movimento detectado: a âncora acompanha a posição atual.
+            motionAnchorLat = location.latitude
+            motionAnchorLng = location.longitude
             if (isStationary) {
                 isStationary = false
                 stationarySince = 0L
