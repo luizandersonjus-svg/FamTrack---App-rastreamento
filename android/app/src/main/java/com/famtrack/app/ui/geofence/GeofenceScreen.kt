@@ -376,19 +376,8 @@ fun GeofenceScreen(
 }
 
 fun scheduleGeofenceCheck(context: android.content.Context) {
-    val workRequest = PeriodicWorkRequestBuilder<GeofenceWorker>(
-        5, TimeUnit.MINUTES
-    ).setConstraints(
-        Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-    ).build()
-
-    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-        "geofence_check",
-        ExistingPeriodicWorkPolicy.UPDATE,
-        workRequest
-    )
+    // Intervalo real de 15 min (mínimo do WorkManager); ver GeofenceWorker.
+    GeofenceWorker.schedule(context)
 }
 
 @Composable
