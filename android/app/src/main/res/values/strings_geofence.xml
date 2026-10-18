@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Textos dos alertas de entrada/saída de geofence (áreas de alerta).
+    Arquivo separado de strings.xml para evitar conflito de edição.
+    Acentos em \u escapes.
+-->
+<resources>
+    <!-- Notificação enviada à família (inbox + alerta do sistema nos outros aparelhos) -->
+    <string name="geofence_alert_enter">%1$s chegou em %2$s</string>
+    <string name="geofence_alert_exit">%1$s saiu de %2$s</string>
+    <!-- Sufixo quando a transição foi enviada com atraso (ex.: estava sem rede) -->
+    <string name="geofence_alert_at_time">%1$s (às %2$s)</string>
+    <string name="geofence_alert_member_fallback">Um membro da família</string>
+    <!-- Aviso local no próprio aparelho de quem se moveu -->
+    <string name="geofence_alert_self_enter">Você chegou em %1$s</string>
+    <string name="geofence_alert_self_exit">Você saiu de %1$s</string>
+</resources>

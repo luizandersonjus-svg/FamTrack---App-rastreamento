@@ -309,13 +309,12 @@ fun HomeScreen(
     }
 
     // Agenda (de forma unica e permanente) a checagem periodica de geofences.
-    // ETAPA 8C: cadencia 5 min (era 15) e politica UPDATE para substituir o
-    // agendamento antigo; o worker avalia apenas os demais membros (o proprio
-    // usuario usa a avaliacao por fix do LocationService).
+    // 15 min = minimo do WorkManager (5 era arredondado para 15). Politica UPDATE
+    // substitui o agendamento antigo. Ver GeofenceWorker (fila + repasse de alertas).
     LaunchedEffect(familyId) {
         if (familyId != null) {
             val workRequest = PeriodicWorkRequestBuilder<GeofenceWorker>(
-                5, TimeUnit.MINUTES
+                GeofenceWorker.REPEAT_INTERVAL_MINUTES, TimeUnit.MINUTES
             ).setConstraints(
                 Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)

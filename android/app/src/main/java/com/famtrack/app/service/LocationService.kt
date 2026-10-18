@@ -32,7 +32,6 @@ import com.famtrack.app.data.offline.StoredPoint
 import com.famtrack.app.data.remote.FamilyRepository
 import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.LocationRepository
-import com.famtrack.app.data.remote.NotificationRepository
 import com.famtrack.app.data.remote.RouteSyncPermanentException
 import com.famtrack.app.data.remote.RouteSyncRetriableException
 import com.famtrack.app.data.remote.SupabaseClient
@@ -46,6 +45,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class LocationService : Service() {
 
@@ -60,7 +61,6 @@ class LocationService : Service() {
     private val locationRepository = LocationRepository()
     private val geofenceRepository = GeofenceRepository()
     private val familyRepository = FamilyRepository()
-    private val notificationRepository = NotificationRepository()
 
     private var currentFamilyId: String? = null
     private var currentUserId: String? = null
@@ -79,6 +79,15 @@ class LocationService : Service() {
     // do estado confirmado antes de emitir transição (evita falso positivo por
     // ruído GPS). In-memory (resetado ao reiniciar o serviço).
     private val boundaryStreak = mutableMapOf<String, Int>()
+
+    // Serializa a avaliação de geofences (uma coroutine por fix).
+    private val geofenceEvalMutex = Mutex()
+
+    // Fila durável das transições próprias (evento + notificação da família).
+    private val geofenceOutbox by lazy { GeofenceTransitionOutbox(this) }
+
+    @Volatile
+    private var lastOutboxFlushAttempt = 0L
 
     // Última localização conhecida (usada pelo sensor de passos)
     private var lastKnownLocation: Location? = null
@@ -875,49 +884,20 @@ result.lastLocation?.let { location ->
 
         serviceScope.launch {
             try {
-                val activeGeofences = cachedGeofences.filter { it.active }
-                var transitions = 0
-
-                for (geofence in activeGeofences) {
-                    // Defensivo: geofence sem id não pode ser avaliada nem transicionada.
-                    val geofenceId = geofence.id ?: continue
-
-                    val distance = FloatArray(1)
-                    Location.distanceBetween(
-                        location.latitude,
-                        location.longitude,
-                        geofence.center_lat,
-                        geofence.center_lon,
-                        distance
-                    )
-
-                    val isInside = distance[0] <= geofence.radius_meters
-                    val wasInside = isUserInsideGeofence(userId, geofenceId)
-
-                    // ETAPA 8C — só transiciona após GEOFENCE_CONFIRM_FIXES fixes
-                    // consecutivos discordando do estado confirmado (dwell curto).
-                    val key = "${userId}_$geofenceId"
-                    val streak = if (isInside == wasInside) {
-                        boundaryStreak.remove(key)
-                        0
-                    } else {
-                        val next = (boundaryStreak[key] ?: 0) + 1
-                        boundaryStreak[key] = next
-                        next
-                    }
-                    if (streak >= GEOFENCE_CONFIRM_FIXES) {
-                        boundaryStreak.remove(key)
-                        transitions += 1
-                        val title = geofence.name
-                        val message = if (isInside) "Chegou em: ${geofence.name}" else "Saiu de: ${geofence.name}"
-                        sendGeofenceNotification(title, message, geofenceId.hashCode() + if (isInside) 0 else 1)
-                        insertGeofenceNotification(familyId, userId, title, message)
-                        updateGeofenceState(userId, geofenceId, isInside)
-                    }
+                // Avaliações em série: cada fix dispara uma coroutine própria e o
+                // streak/estado não podem ser lidos e gravados em paralelo.
+                val transitions = geofenceEvalMutex.withLock {
+                    evaluateGeofences(location, familyId, userId)
                 }
 
-                // ETAPA 7 — observabilidade: transições de geofence avaliadas.
+                // ETAPA 7 — observabilidade: transições de geofence confirmadas.
                 Telemetry.registerGeofence(transitions)
+
+                // Envia na hora o que acabou de ser detectado; fora isso, tenta
+                // reenviar pendências (ex.: detectadas sem rede) com throttle.
+                flushGeofenceOutbox(force = transitions > 0)
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
             } catch (e: Exception) {
                 // Nunca crasha por falha de rede/banco/estado na avaliação de geofences.
                 Log.e(TAG, "Falha protegida na avaliação de geofences: ${e.localizedMessage}")
@@ -925,36 +905,116 @@ result.lastLocation?.let { location ->
         }
     }
 
-    private fun insertGeofenceNotification(
-        familyId: String,
-        userId: String,
-        title: String,
-        message: String
-    ) {
-        serviceScope.launch {
-            try {
-                // Notifica os membros da família (exceto o próprio usuário)
-                notificationRepository.notifyFamily(
-                    familyId = familyId,
-                    senderUserId = userId,
-                    title = title,
-                    message = message,
-                    type = "geofence"
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Falha ao enviar notificação de geofence", e)
+    /**
+     * Fonte única de verdade das transições ENTER/EXIT do PRÓPRIO usuário
+     * (o GeofenceWorker não avalia mais ninguém). Regras:
+     *  - primeira observação de uma geofence (sem estado salvo): só grava o
+     *    estado, sem avisar — antes o estado inicial "fora" fazia quem já estava
+     *    em casa "chegar em Casa" ao ligar o app ou ao criar a área;
+     *  - fixes imprecisos demais para a área são ignorados (não contam no streak);
+     *  - histerese: para SAIR é preciso passar de raio + margem;
+     *  - confirmação: GEOFENCE_CONFIRM_FIXES fixes seguidos discordando do estado.
+     * Na transição confirmada o estado é persistido na hora (verdade local) e o
+     * envio (evento + notificação da família) vai para a fila durável.
+     *
+     * @return número de transições confirmadas neste fix.
+     */
+    private fun evaluateGeofences(location: Location, familyId: String, userId: String): Int {
+        val statePrefs = getSharedPreferences(GEOFENCE_STATE_PREFS, MODE_PRIVATE)
+        val activeGeofences = cachedGeofences.filter { it.active }
+        var transitions = 0
+
+        for (geofence in activeGeofences) {
+            // Defensivo: geofence sem id não pode ser avaliada nem transicionada.
+            val geofenceId = geofence.id ?: continue
+            val key = "${userId}_$geofenceId"
+
+            // Fix com incerteza maior que a própria área não decide nada.
+            if (location.hasAccuracy() &&
+                location.accuracy > maxOf(geofence.radius_meters, GEOFENCE_MAX_ACCURACY_M)
+            ) continue
+
+            val distance = FloatArray(1)
+            Location.distanceBetween(
+                location.latitude,
+                location.longitude,
+                geofence.center_lat,
+                geofence.center_lon,
+                distance
+            )
+
+            if (!statePrefs.contains(key)) {
+                // Primeira observação: registra o estado em silêncio.
+                statePrefs.edit().putBoolean(key, distance[0] <= geofence.radius_meters).apply()
+                boundaryStreak.remove(key)
+                continue
             }
+
+            val wasInside = statePrefs.getBoolean(key, false)
+            val isInside = if (wasInside) {
+                distance[0] <= geofence.radius_meters + GEOFENCE_EXIT_MARGIN_M
+            } else {
+                distance[0] <= geofence.radius_meters
+            }
+
+            // ETAPA 8C — só transiciona após GEOFENCE_CONFIRM_FIXES fixes
+            // consecutivos discordando do estado confirmado (dwell curto).
+            val streak = if (isInside == wasInside) {
+                boundaryStreak.remove(key)
+                0
+            } else {
+                val next = (boundaryStreak[key] ?: 0) + 1
+                boundaryStreak[key] = next
+                next
+            }
+            if (streak < GEOFENCE_CONFIRM_FIXES) continue
+
+            boundaryStreak.remove(key)
+            transitions += 1
+
+            // 1) Fila durável primeiro (commit síncrono); 2) depois o estado.
+            // Se o processo morrer entre os dois, a transição é redetectada,
+            // nunca perdida.
+            geofenceOutbox.enqueue(
+                PendingGeofenceTransition(
+                    id = java.util.UUID.randomUUID().toString(),
+                    familyId = familyId,
+                    memberId = userId,
+                    geofenceId = geofenceId,
+                    placeId = geofence.placeId,
+                    geofenceName = geofence.name,
+                    enter = isInside,
+                    // Evento ancorado no centro da área: o pino no mapa e a tela
+                    // de Atividade resolvem o nome do local de forma exata (o fix
+                    // de saída, por definição, já está fora do raio).
+                    lat = geofence.center_lat,
+                    lng = geofence.center_lon,
+                    occurredAtMs = if (location.time > 0L) location.time else System.currentTimeMillis()
+                )
+            )
+            statePrefs.edit().putBoolean(key, isInside).apply()
+
+            // Aviso local apenas neste aparelho (não gera linha em notifications).
+            val selfText = getString(
+                if (isInside) R.string.geofence_alert_self_enter else R.string.geofence_alert_self_exit,
+                geofence.name
+            )
+            sendGeofenceNotification(
+                geofence.name,
+                selfText,
+                geofenceId.hashCode() + if (isInside) 0 else 1
+            )
         }
+        return transitions
     }
 
-    private fun isUserInsideGeofence(userId: String, geofenceId: String): Boolean {
-        val prefs = getSharedPreferences("geofence_state", MODE_PRIVATE)
-        return prefs.getBoolean("${userId}_${geofenceId}", false)
-    }
-
-    private fun updateGeofenceState(userId: String, geofenceId: String, inside: Boolean) {
-        val prefs = getSharedPreferences("geofence_state", MODE_PRIVATE)
-        prefs.edit().putBoolean("${userId}_${geofenceId}", inside).apply()
+    /** Esvazia a fila de transições pendentes (throttle quando não forçado). */
+    private suspend fun flushGeofenceOutbox(force: Boolean) {
+        if (!geofenceOutbox.hasPending()) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastOutboxFlushAttempt < GEOFENCE_OUTBOX_RETRY_MS) return
+        lastOutboxFlushAttempt = now
+        geofenceOutbox.flush()
     }
 
     private fun sendGeofenceNotification(title: String, message: String, notificationId: Int) {
@@ -1108,6 +1168,18 @@ result.lastLocation?.let { location ->
         // ETAPA 8C — dwell do próprio usuário: número de fixes consecutivos
         // discordando do estado confirmado antes de emitir a transição.
         private const val GEOFENCE_CONFIRM_FIXES = 2
+
+        // Estado dentro/fora por chave "<userId>_<geofenceId>" (limpo no logout).
+        private const val GEOFENCE_STATE_PREFS = "geofence_state"
+
+        // Fixes com accuracy acima de max(raio, este valor) não decidem transição.
+        private const val GEOFENCE_MAX_ACCURACY_M = 150.0
+
+        // Histerese de saída: estando dentro, só conta "fora" além de raio + margem.
+        private const val GEOFENCE_EXIT_MARGIN_M = 25.0
+
+        // Reenvio da fila de transições pendentes (sem rede) no máximo 1x/min.
+        private const val GEOFENCE_OUTBOX_RETRY_MS = 60_000L
 
         // ETAPA 3 — bateria: cadência adaptativa do GPS (parado x em movimento)
         // Velocidade > este valor (m/s) já conta como movimento imediato.
