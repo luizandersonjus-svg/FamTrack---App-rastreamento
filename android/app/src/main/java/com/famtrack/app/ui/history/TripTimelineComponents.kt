@@ -3,35 +3,19 @@ package com.famtrack.app.ui.history
 import android.content.Context
 import android.location.Location
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Route
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,30 +25,25 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.famtrack.app.R
-import com.famtrack.app.data.model.Geofence
 import com.famtrack.app.data.model.RoutePoint
 import com.famtrack.app.feature.common.AddressResolver
 import com.famtrack.app.feature.places.Place
 import com.famtrack.app.util.parseIsoInstantMillis
 import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.maps.android.compose.CameraPositionState
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
-import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.JointType
 import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.Circle
+import com.google.android.gms.maps.model.RoundCap
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
 import com.google.maps.android.compose.MapType
-import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
@@ -335,7 +314,7 @@ internal fun computeRouteCenterAndZoom(points: List<LatLng>): Triple<Double, Dou
 }
 
 @Composable
-private fun distanceText(totalDistance: Double?): String {
+internal fun distanceText(totalDistance: Double?): String {
     if (totalDistance == null) return "—"
     return if (totalDistance >= 1000) {
         stringResource(
@@ -382,563 +361,6 @@ internal suspend fun tripLocationLabel(
     // bottom sheet e SOS). Fallback dos títulos de percurso: "Local aproximado".
     return AddressResolver.resolveForDisplay(context, latitude, longitude, places)
         ?: context.getString(R.string.history_local_approx)
-}
-
-// ---------------------------------------------------------------------------
-// Resumo do dia (Parte B.3)
-// ---------------------------------------------------------------------------
-
-@Composable
-internal fun DayTimelineSummary(
-    points: List<RoutePoint>,
-    totalDistance: Double?,
-    tripCount: Int
-) {
-    val firstMillis = parseTimestampMillis(points.firstOrNull()?.recorded_at)
-    val lastMillis = parseTimestampMillis(points.lastOrNull()?.recorded_at)
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = stringResource(R.string.history_summary_title),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = distanceText(totalDistance),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = stringResource(R.string.history_day_points_count, points.size),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(R.string.history_day_trips_count, tripCount),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = if (firstMillis != null) {
-                        stringResource(R.string.history_day_first_time, formatTripTime(firstMillis))
-                    } else {
-                        "-"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = if (lastMillis != null) {
-                        stringResource(R.string.history_day_last_time, formatTripTime(lastMillis))
-                    } else {
-                        "-"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Header de controles da linha do tempo (velocidade + refresh)
-// ---------------------------------------------------------------------------
-
-/**
- * Header de controles da linha do tempo (refresh). Limite de velocidade
- * agora é configurado em SettingsScreen e lido via DataStore.
- */
-@Composable
-internal fun TimelineControlsHeader(
-    truncated: Boolean,
-    onRefresh: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = stringResource(R.string.history_trips_title),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.weight(1f)
-        )
-        IconButton(onClick = onRefresh) {
-            Icon(
-                Icons.Default.Refresh,
-                contentDescription = stringResource(R.string.history_trips_refresh),
-                tint = MaterialTheme.colorScheme.primary
-            )
-        }
-    }
-    if (truncated) {
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = stringResource(R.string.history_trip_truncated, MAX_TRIP_POINTS),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Card de percurso (Parte C) — estilo FamTrack
-// ---------------------------------------------------------------------------
-
-@Composable
-internal fun TripTimelineCard(
-    trip: TripSummary,
-    points: List<RoutePoint>,
-    origin: String,
-    destination: String,
-    memberName: String?,
-    avatarColor: Color,
-    showThumbnail: Boolean,
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
-            val title = if (origin.isBlank() || destination.isBlank() ||
-                origin.equals(destination, ignoreCase = true)
-            ) {
-                stringResource(R.string.history_trip_generic_title)
-            } else {
-                stringResource(R.string.history_trip_from_to, origin, destination)
-            }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = stringResource(
-                    R.string.history_trip_subtitle,
-                    formatTripTime(trip.startMillis),
-                    formatTripTime(trip.endMillis),
-                    tripDurationText(trip.durationMillis)
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = distanceText(trip.distanceMeters),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = stringResource(
-                        R.string.history_metric_avg,
-                        speedText(trip.avgSpeedKmh)
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = stringResource(
-                        R.string.history_metric_max,
-                        speedText(trip.maxSpeedKmh)
-                    ),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            TripSpeedStatus(trip.possibleSpeeding)
-            Spacer(modifier = Modifier.height(12.dp))
-            TripRouteThumbnail(
-                points = points,
-                memberName = memberName,
-                avatarColor = avatarColor,
-                showThumbnail = showThumbnail
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = stringResource(R.string.history_trip_play),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-    }
-}
-
-/** Badge arredondado (âmbar/teal) + nota. Âmbar/laranja para "possível excesso". */
-@Composable
-private fun TripSpeedStatus(possibleSpeeding: Boolean) {
-    if (possibleSpeeding) {
-        val bg = Color(0xFFFFF3E0)
-        val fg = Color(0xFFB45309)
-        Surface(
-            color = bg,
-            shape = RoundedCornerShape(50)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Warning,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = fg
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = stringResource(R.string.history_trip_speeding),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = fg
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.history_trip_speed_note),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    } else {
-        val bg = Color(0xFFE0F5F2)
-        val fg = Color(0xFF0B6B60)
-        Surface(
-            color = bg,
-            shape = RoundedCornerShape(50)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Check,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = fg
-                )
-                Spacer(modifier = Modifier.width(5.dp))
-                Text(
-                    text = stringResource(R.string.history_trip_safe),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = fg
-                )
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Miniatura do percurso (Parte C.5)
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun TripRouteThumbnail(
-    points: List<RoutePoint>,
-    memberName: String?,
-    avatarColor: Color,
-    showThumbnail: Boolean
-) {
-    val thumbPoints = remember(points) {
-        if (points.size > 600) douglasPeucker(points, DISPLAY_EPSILON_METERS) else points
-    }
-    val displaySegments = remember(thumbPoints) { splitSegments(thumbPoints) }
-    val latLngs = remember(thumbPoints) { thumbPoints.map { LatLng(it.latitude, it.longitude) } }
-
-    if (!showThumbnail || displaySegments.none { it.size >= 2 }) {
-        FallbackTripThumbnail()
-        return
-    }
-
-    val (thumbLat, thumbLon, thumbZoom) = computeRouteCenterAndZoom(latLngs)
-    val camera = rememberCameraPositionState(
-        key = "trip_thumbnail",
-        init = {
-            position = CameraPosition.fromLatLngZoom(LatLng(thumbLat, thumbLon), thumbZoom)
-        }
-    )
-    LaunchedEffect(camera, latLngs) {
-        val (clat, clon, zoom) = computeRouteCenterAndZoom(latLngs)
-        camera.position = CameraPosition.fromLatLngZoom(LatLng(clat, clon), zoom)
-    }
-    val density = LocalDensity.current.density
-    val avatarDescriptor = remember(memberName, avatarColor, density) {
-        BitmapDescriptorFactory.fromBitmap(
-            playbackAvatarBitmap(density, memberName, avatarColor.toArgb())
-        )
-    }
-
-    GoogleMap(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(130.dp)
-            .clip(RoundedCornerShape(12.dp)),
-        cameraPositionState = camera,
-        properties = MapProperties(mapType = MapType.NORMAL),
-        uiSettings = MapUiSettings(
-            zoomControlsEnabled = false,
-            scrollGesturesEnabled = false,
-            zoomGesturesEnabled = false,
-            rotationGesturesEnabled = false,
-            tiltGesturesEnabled = false,
-            mapToolbarEnabled = false,
-            compassEnabled = false
-        )
-    ) {
-        displaySegments.forEach { rawSeg ->
-            if (rawSeg.size >= 2) {
-                Polyline(
-                    points = rawSeg.map { LatLng(it.latitude, it.longitude) },
-                    color = MaterialTheme.colorScheme.primary,
-                    width = 5f
-                )
-            }
-        }
-        val first = latLngs.first()
-        val last = latLngs.last()
-        Marker(
-            state = MarkerState(position = first),
-            title = stringResource(R.string.history_start_marker),
-            icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)
-        )
-        Marker(
-            state = MarkerState(position = last),
-            title = stringResource(R.string.history_end_marker),
-            icon = avatarDescriptor,
-            anchor = Offset(0.5f, 0.5f),
-            zIndex = 5f
-        )
-    }
-}
-
-/** Fallback visual simples para percursos além dos 3 mais recentes. */
-@Composable
-private fun FallbackTripThumbnail() {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(130.dp)
-            .clip(RoundedCornerShape(12.dp)),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.07f),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.Route,
-                    contentDescription = stringResource(R.string.history_fallback_thumbnail),
-                    modifier = Modifier.size(32.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = stringResource(R.string.history_fallback_thumbnail),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Mapa da rota do dia (mantém a visão interativa do dia inteiro)
-// ---------------------------------------------------------------------------
-
-@Composable
-internal fun DayRouteMapCard(
-    orderedPoints: List<RoutePoint>,
-    geofences: List<Geofence>,
-    onPlay: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val display = remember(orderedPoints) {
-        if (orderedPoints.size > 1200) douglasPeucker(orderedPoints, DISPLAY_EPSILON_METERS) else orderedPoints
-    }
-    val rawDrawSegments = remember(display) { splitSegments(display) }
-    val latLngs = remember(display) { display.map { LatLng(it.latitude, it.longitude) } }
-    var matchedResult by remember { mutableStateOf<MatchedRouteResult?>(null) }
-    val camera = rememberCameraPositionState()
-
-    LaunchedEffect(orderedPoints) {
-        matchedResult = null
-        if (orderedPoints.size >= 2) {
-            scope.launch { matchedResult = fetchMatchedRoute(orderedPoints) }
-        }
-        if (latLngs.isNotEmpty()) {
-            val (clat, clon, zoom) = computeRouteCenterAndZoom(latLngs)
-            camera.animate(
-                CameraUpdateFactory.newLatLngZoom(LatLng(clat, clon), zoom),
-                700
-            )
-        }
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = stringResource(R.string.history_route_day_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = onPlay) {
-                    Icon(
-                        Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(stringResource(R.string.history_route_day_play))
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(170.dp)
-            ) {
-                GoogleMap(
-                    modifier = Modifier.fillMaxSize(),
-                    cameraPositionState = camera,
-                    properties = MapProperties(mapType = MapType.NORMAL)
-                ) {
-                    val segments = matchedResult?.segments
-                    val hasMatched = segments?.any { it.points.size >= 2 } == true
-                    if (hasMatched) {
-                        segments.forEach { seg ->
-                            if (seg.points.size >= 2) {
-                                Polyline(
-                                    points = seg.points,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    width = 6f
-                                )
-                            }
-                        }
-                    } else {
-                        rawDrawSegments.forEach { rawSeg ->
-                            if (rawSeg.size >= 2) {
-                                Polyline(
-                                    points = rawSeg.map { LatLng(it.latitude, it.longitude) },
-                                    color = MaterialTheme.colorScheme.primary,
-                                    width = 6f
-                                )
-                            }
-                        }
-                    }
-                    val first = orderedPoints.firstOrNull()
-                    if (first != null) {
-                        Marker(
-                            state = MarkerState(position = LatLng(first.latitude, first.longitude)),
-                            title = stringResource(R.string.history_start_marker),
-                            icon = BitmapDescriptorFactory.defaultMarker(
-                                BitmapDescriptorFactory.HUE_GREEN
-                            )
-                        )
-                    }
-                    if (orderedPoints.size > 1) {
-                        val last = orderedPoints.lastOrNull()
-                        if (last != null) {
-                            Marker(
-                                state = MarkerState(position = LatLng(last.latitude, last.longitude)),
-                                title = stringResource(R.string.history_end_marker),
-                                icon = BitmapDescriptorFactory.defaultMarker(
-                                    BitmapDescriptorFactory.HUE_RED
-                                )
-                            )
-                        }
-                    }
-                    geofences.forEach { gf ->
-                        val center = LatLng(gf.center_lat, gf.center_lon)
-                        val strokeColor = try {
-                            Color(android.graphics.Color.parseColor(gf.color))
-                        } catch (e: Exception) {
-                            Color.Red
-                        }
-                        Circle(
-                            center = center,
-                            radius = gf.radius_meters,
-                            strokeColor = strokeColor,
-                            fillColor = strokeColor.copy(alpha = 0.25f),
-                            strokeWidth = 3f
-                        )
-                        Marker(state = MarkerState(position = center), title = gf.name)
-                    }
-                }
-            }
-            Text(
-                text = stringResource(R.string.osrm_attribution),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 6.dp)
-            )
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,9 +482,13 @@ internal fun TripPlayerScreen(
     title: String,
     memberName: String?,
     onClose: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    routeColor: Color? = null
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
+    // HIST-UX: o player usa a cor do membro (a mesma da linha do tempo/mapa).
+    val primaryColor = routeColor ?: MaterialTheme.colorScheme.primary
+    val density = LocalDensity.current.density
+    val baseLineWidth = 8f * density
     val playPoints = remember(points) {
         if (points.size > 800) douglasPeucker(points, DISPLAY_EPSILON_METERS) else points
     }
@@ -1115,7 +541,10 @@ internal fun TripPlayerScreen(
                         Polyline(
                             points = seg.points,
                             color = primaryColor.copy(alpha = 0.35f),
-                            width = 6f
+                            width = baseLineWidth,
+                            startCap = RoundCap(),
+                            endCap = RoundCap(),
+                            jointType = JointType.ROUND
                         )
                     }
                 }
@@ -1125,13 +554,51 @@ internal fun TripPlayerScreen(
                         Polyline(
                             points = rawSeg.map { LatLng(it.latitude, it.longitude) },
                             color = primaryColor.copy(alpha = 0.35f),
-                            width = 6f
+                            width = baseLineWidth,
+                            startCap = RoundCap(),
+                            endCap = RoundCap(),
+                            jointType = JointType.ROUND
                         )
                     }
                 }
             }
             if (playback.hasRoute) {
-                PlaybackMapLayers(controller = playback, primaryColor = primaryColor)
+                PlaybackMapLayers(
+                    controller = playback,
+                    primaryColor = primaryColor,
+                    widthPx = baseLineWidth
+                )
+            }
+            // HIST-UX: marcadores A (saída) e B (chegada), iguais aos da linha do tempo.
+            val startPos = latLngs.firstOrNull()
+            val endPos = latLngs.lastOrNull()
+            if (startPos != null && endPos != null && latLngs.size >= 2) {
+                val startIcon = remember(density) {
+                    BitmapDescriptorFactory.fromBitmap(
+                        labeledCircleBitmap(density, "A", START_MARKER_COLOR.toArgb(), 30f)
+                    )
+                }
+                val endIcon = remember(density) {
+                    BitmapDescriptorFactory.fromBitmap(
+                        labeledCircleBitmap(density, "B", END_MARKER_COLOR.toArgb(), 30f)
+                    )
+                }
+                val startState = remember(startPos) { MarkerState(position = startPos) }
+                val endState = remember(endPos) { MarkerState(position = endPos) }
+                Marker(
+                    state = startState,
+                    icon = startIcon,
+                    anchor = Offset(0.5f, 0.5f),
+                    title = stringResource(R.string.history_marker_start_title),
+                    zIndex = 4f
+                )
+                Marker(
+                    state = endState,
+                    icon = endIcon,
+                    anchor = Offset(0.5f, 0.5f),
+                    title = stringResource(R.string.history_marker_end_title),
+                    zIndex = 5f
+                )
             }
         }
         RoutePlaybackEngine(playback)
