@@ -1368,21 +1368,21 @@ label = {
                     // filtrados/decimados pelo LiveTrailStore e cor estável por membro.
                     // TRACK-2: trechos encaixados nas ruas em linha cheia; GPS bruto
                     // (ainda não processado ou não encaixável) em linha tracejada.
-                    trailPolylines.forEach { (uid, segments) ->
-                        val color = trailColorForMember(uid)
-                        val pieces = trailPiecesForDrawing(segments, snappedTrails[uid])
-                        pieces.forEach { piece ->
-                            if (piece.points.size >= 2) {
-                                Polyline(
-                                    points = piece.points,
-                                    color = if (piece.onRoad) color else color.copy(alpha = 0.6f),
-                                    width = 8f,
-                                    zIndex = 0.4f,
-                                    pattern = if (piece.onRoad) null else TRAIL_PROVISIONAL_PATTERN
-                                )
-                            }
-                        }
+                    // Largura acompanha o zoom para ocupar a largura da rua
+                    // (LiveTrailOverlay.kt); a leitura da câmera fica isolada lá,
+                    // então dar zoom recompõe só o rastro, não os marcadores.
+                    val memberTrails = trailPolylines.map { (uid, segments) ->
+                        MemberTrail(
+                            color = trailColorForMember(uid),
+                            pieces = trailPiecesForDrawing(segments, snappedTrails[uid])
+                        )
                     }
+                    LiveTrailPolylines(
+                        trails = memberTrails,
+                        cameraPositionState = cameraPositionState,
+                        density = markerDensity,
+                        provisionalBasePattern = TRAIL_PROVISIONAL_PATTERN
+                    )
                 }
             }
 
