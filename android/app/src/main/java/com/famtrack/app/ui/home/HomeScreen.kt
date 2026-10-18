@@ -121,6 +121,8 @@ private const val FALLBACK_START_ZOOM = 3.5f
 // Seguindo a si mesmo: arrastar o mapa a mais que isto (dp) da própria
 // posição solta a câmera; pinçar/arrastar pouco mantém o "seguir".
 private const val SELF_FOLLOW_RELEASE_DP = 80f
+// Fix salvo com até esta idade é usado como posição inicial ao recriar a Home.
+private const val RECENT_FIX_SEED_MS = 2 * 60_000L
 // Quantos avatares cabem na barra recolhida de membros antes do "+N".
 private const val BAR_MAX_AVATARS = 3
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
@@ -227,7 +229,16 @@ fun HomeScreen(
         )
     }
 
-    var currentLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    // Começa com o último fix salvo, se recente (≤ 2 min): ao voltar de outra
+    // aba (Histórico, Configurações) a Home é recriada e, sem isso, mostrava
+    // "Carregando localização" por ~20 s até o próximo fix do FLP.
+    var currentLocation by remember {
+        mutableStateOf<Pair<Double, Double>?>(
+            LocationFixStore.load(context)
+                ?.takeIf { System.currentTimeMillis() - it.fixAtMillis in 0..RECENT_FIX_SEED_MS }
+                ?.let { it.latitude to it.longitude }
+        )
+    }
     var currentFix by remember { mutableStateOf<SosFix?>(null) }
     var familyLocations by remember { mutableStateOf<List<FamLocation>>(emptyList()) }
     var activeSosAlerts by remember { mutableStateOf<List<com.famtrack.app.data.model.SosAlert>>(emptyList()) }
