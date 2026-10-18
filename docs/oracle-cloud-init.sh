@@ -19,8 +19,12 @@ set -euo pipefail
 echo "inicio: $(date)"
 
 # 1) Firewall do Ubuntu (a imagem da Oracle bloqueia 80/443 por padrão)
-iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+# As regras precisam ficar ANTES do REJECT da imagem Oracle (posição varia);
+# inseridas depois dele, nunca são alcançadas e as portas ficam fechadas.
+POS=$(iptables -L INPUT --line-numbers -n | awk '$2=="REJECT"{print $1; exit}')
+POS=${POS:-1}
+iptables -I INPUT "$POS" -m state --state NEW -p tcp --dport 443 -j ACCEPT
+iptables -I INPUT "$POS" -m state --state NEW -p tcp --dport 80 -j ACCEPT
 netfilter-persistent save || true
 
 # 2) Swap de 4 GB (folga durante o processamento do mapa)
