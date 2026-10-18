@@ -25,6 +25,13 @@ android {
 
         // Carregar chaves do local.properties
         val localProps = project.rootProject.file("local.properties")
+        // TRACK-3: servidor OSRM (map-matching). Vazio = servidor de DEMONSTRAÇÃO
+        // público (só para testes, 1 req/s). Ver docs/osrm-servidor-proprio.md.
+        val osrmProps = Properties().apply {
+            if (localProps.exists()) localProps.inputStream().use { load(it) }
+        }
+        buildConfigField("String", "OSRM_BASE_URL", "\"${osrmProps.getProperty("OSRM_BASE_URL", "")}\"")
+        buildConfigField("String", "OSRM_API_KEY", "\"${osrmProps.getProperty("OSRM_API_KEY", "")}\"")
         if (localProps.exists()) {
             val props = Properties().apply { localProps.inputStream().use { load(it) } }
             buildConfigField("String", "SUPABASE_URL", "\"${props.getProperty("SUPABASE_URL", "")}\"")

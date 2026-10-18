@@ -26,6 +26,9 @@
 3. Cole TODO o conteúdo do arquivo `sql/01_schema.sql`
 4. Clique em **"Run"** (botão verde)
 5. Aguarde a mensagem de sucesso
+6. Rode também, um por vez e na ordem, os demais arquivos de `sql/` listados no
+   README (seção "Configure o Supabase"), até o `12_security_lints.sql`.
+   Sem o `11`, criar/entrar em família pelo app não funciona.
 
 ## Passo 4: Habilitar Auth (Login)
 
@@ -100,6 +103,12 @@
 SUPABASE_URL=https://SEU-PROJETO.supabase.co
 SUPABASE_ANON_KEY=sua-chave-anon-aqui
 GOOGLE_MAPS_API_KEY=sua-chave-google-maps-aqui
+
+# Opcional: servidor OSRM próprio (encaixe do rastro nas ruas).
+# Sem estas linhas, o app usa o servidor de demonstração (só para testes).
+# Guia: docs/osrm-servidor-proprio.md
+OSRM_BASE_URL=https://seu-subdominio.duckdns.org
+OSRM_API_KEY=sua-chave-osrm
 ```
 
 3. Para obter a chave do Google Maps:

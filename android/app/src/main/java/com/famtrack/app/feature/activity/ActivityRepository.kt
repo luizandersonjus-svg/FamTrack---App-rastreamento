@@ -13,7 +13,9 @@ class ActivityRepository {
         try {
             SupabaseClient.getInstance().from("events").insert(event)
         } catch (e: Exception) {
-            android.util.Log.e("ActivityRepository", "Falha ao registrar evento", e)
+            // Log sanitizado: a mensagem de RestException inclui headers/token,
+            // e a fila de geofence pode repetir esta chamada várias vezes offline.
+            com.famtrack.app.feature.common.ErrorMessages.logSafe(e, "Falha ao registrar evento ${event.type}")
             throw e
         }
     }

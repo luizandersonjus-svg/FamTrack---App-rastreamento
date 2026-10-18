@@ -278,11 +278,19 @@
     <string name="home_empty_members_title">Nenhum membro por aqui</string>
     <string name="home_empty_members_text">Convide algu\u00e9m da fam\u00edlia para acompanhar a localiza\u00e7\u00e3o de voc\u00eas.</string>
     <string name="home_empty_members_action">Convidar</string>
+    <string name="home_no_family_title">Bem-vindo ao FamTrack!</string>
+    <string name="home_no_family_text">Para ver sua fam\u00edlia no mapa, crie uma fam\u00edlia nova ou entre com o c\u00f3digo de convite que algu\u00e9m te enviou.</string>
+    <string name="home_no_family_create">Criar minha fam\u00edlia</string>
+    <string name="home_no_family_join">Entrar com c\u00f3digo</string>
+    <string name="home_no_family_create_fail">N\u00e3o foi poss\u00edvel criar a fam\u00edlia. Verifique a internet e tente de novo.</string>
     <string name="home_panel_placeholder">Toque para ver todos os membros</string>
     <string name="home_panel_expand_cd">Expandir lista de membros</string>
     <string name="home_panel_collapse_cd">Recolher lista de membros</string>
     <string name="home_panel_member_format">%1$s \u00b7 %2$s</string>
-    <string name="home_sos_active_title">ALERTA SOS ATIVO</string>
+    <string name="home_focus_member_cd">Mostrar %1$s no mapa</string>
+    <string name="home_following_member">Seguindo %1$s no mapa</string>
+    <string name="home_focus_no_location">%1$s ainda n\u00e3o tem localiza\u00e7\u00e3o no mapa</string>
+    <string name="home_focus_more_cd">Ver todos os membros</string>    <string name="home_sos_active_title">ALERTA SOS ATIVO</string>
     <string name="home_sos_time_label">Hor\u00e1rio</string>
     <string name="home_sos_location_label">Localiza\u00e7\u00e3o</string>
     <string name="home_sos_resolve">Resolver</string>
@@ -433,6 +441,7 @@
     <string name="map_layer_weather">Clima</string>
     <string name="map_layer_trail">Rastro ao vivo</string>
     <string name="map_trail_clear">Limpar rastro</string>
+    <string name="map_trail_osm_attribution">Rastro ajustado às ruas com dados © colaboradores do OpenStreetMap</string>
     <string name="map_legend_toggle">Legenda</string>
     <string name="map_legend_title">Legenda</string>
     <string name="map_legend_current">Localiza\u00e7\u00e3o atual</string>
@@ -491,4 +500,45 @@
     <string name="notifications_delete_message">Excluir da lista? O hist\u00f3rico de eventos da fam\u00edlia n\u00e3o \u00e9 afetado.</string>
     <string name="notifications_delete_confirm">Excluir</string>
     <string name="notifications_delete_cancel">Cancelar</string>
+
+    <!-- HIST-UX: histórico como linha do tempo do dia (Parada / Trajeto) -->
+    <string name="history_member_fallback">Membro</string>
+    <string name="history_date_yesterday_format">Ontem, %1$s</string>
+    <string name="history_pick_date_cd">Escolher data</string>
+    <string name="history_loading_member">Carregando o dia de %1$s…</string>
+    <string name="history_error_friendly">Verifique a conexão com a internet e tente de novo.</string>
+    <string name="history_empty_member_day">Nenhum trajeto de %1$s neste dia</string>
+    <string name="history_empty_hint">Os trajetos aparecem aqui quando o celular está com a localização ligada e com internet.</string>
+    <string name="history_summary_trips_one">1 trajeto</string>
+    <string name="history_summary_trips_many">%1$d trajetos</string>
+    <string name="history_summary_moving">%1$s em movimento</string>
+    <string name="history_play_day">Reproduzir o dia</string>
+    <string name="history_tap_trip_hint">Toque num trajeto para ver o caminho no mapa.</string>
+    <string name="history_stay_label">Parada</string>
+    <string name="history_stay_first">Início do dia</string>
+    <string name="history_stay_last">Último local registrado</string>
+    <string name="history_stay_whole_day">Sem trajetos neste dia</string>
+    <string name="history_stay_left_at">Saiu às %1$s</string>
+    <string name="history_stay_arrived_at">Chegou às %1$s</string>
+    <string name="history_place_loading">Buscando local…</string>
+    <string name="history_trip_number">Trajeto %1$d</string>
+    <string name="history_trip_of_total">Trajeto %1$d de %2$d</string>
+    <string name="history_trip_from_to_short">%1$s → %2$s</string>
+    <string name="history_trip_round">Ida e volta: %1$s</string>
+    <string name="history_trip_line">%1$s – %2$s • %3$s • %4$s</string>
+    <string name="history_open_on_map">Ver no mapa</string>
+    <string name="history_mode_walk">Provavelmente a pé</string>
+    <string name="history_mode_vehicle">Provavelmente de carro ou ônibus</string>
+    <string name="history_show_all_trips">Todos os trajetos</string>
+    <string name="history_prev_trip">Trajeto anterior</string>
+    <string name="history_next_trip">Próximo trajeto</string>
+    <string name="history_marker_start_title">A • Saída</string>
+    <string name="history_marker_end_title">B • Chegada</string>
+    <string name="history_stat_duration">Duração</string>
+    <string name="history_stat_distance">Distância</string>
+    <string name="history_stat_avg_speed">Velocidade média</string>
+    <string name="history_speed_value">%1$s km/h</string>
+    <string name="history_trip_speeding_detail">Velocidade máxima de %1$s km/h, acima do limite do alerta. Baseado no GPS; o limite da via não é verificado.</string>
+    <string name="history_gap_note">Linha tracejada: trecho sem sinal de GPS.</string>
+    <string name="history_play_trip">Reproduzir trajeto</string>
 </resources>

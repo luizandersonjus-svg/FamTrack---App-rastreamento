@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Textos da politica de privacidade de saude (Health Connect) e da
+    permissao de contagem de passos (ACTIVITY_RECOGNITION).
+    Arquivo separado de strings.xml para evitar conflitos de merge.
+-->
+<resources>
+
+    <!-- Politica de privacidade de saude (aberta pelo Health Connect e pelas Configuracoes) -->
+    <string name="health_privacy_title">Privacidade dos dados de sa\u00fade</string>
+    <string name="health_privacy_back">Voltar</string>
+    <string name="health_privacy_intro">O FamTrack pode mostrar seus batimentos card\u00edacos, se voc\u00ea permitir. Aqui explicamos, de forma simples, o que fazemos com esses dados.</string>
+
+    <string name="health_privacy_what_title">O que o FamTrack l\u00ea</string>
+    <string name="health_privacy_what_body">Somente a frequ\u00eancia card\u00edaca (batimentos por minuto) de hoje, que o seu rel\u00f3gio ou pulseira grava no Health Connect. O FamTrack n\u00e3o l\u00ea sono, peso, press\u00e3o, passos nem nenhum outro dado do Health Connect, e nunca grava nada nele.</string>
+
+    <string name="health_privacy_why_title">Para que serve</string>
+    <string name="health_privacy_why_body">Para mostrar a voc\u00ea um resumo dos batimentos do dia (m\u00e9dia, menor e maior valor) e, se voc\u00ea quiser, deixar sua fam\u00edlia ver que est\u00e1 tudo bem. N\u00e3o usamos esses dados para an\u00fancios e n\u00e3o vendemos para ningu\u00e9m.</string>
+
+    <string name="health_privacy_who_title">Quem pode ver</string>
+    <string name="health_privacy_who_body">Por padr\u00e3o, s\u00f3 voc\u00ea, no seu celular. Se voc\u00ea ligar \u201cCompartilhar batimentos\u201d em Configura\u00e7\u00f5es &gt; Privacidade, o FamTrack envia apenas o resumo do dia (m\u00e9dia, m\u00ednimo, m\u00e1ximo e quantidade de leituras), e somente os membros da sua fam\u00edlia no FamTrack podem v\u00ea-lo. A lista completa de batimentos nunca sai do seu celular.</string>
+
+    <string name="health_privacy_off_title">Como desligar</string>
+    <string name="health_privacy_off_body">Para parar de mostrar \u00e0 fam\u00edlia: em Configura\u00e7\u00f5es &gt; Privacidade, desligue \u201cCompartilhar batimentos\u201d. A fam\u00edlia deixa de ver na hora.\n\nPara tirar todo o acesso do FamTrack aos batimentos: abra o Health Connect, entre em Permiss\u00f5es de apps &gt; FamTrack e desligue \u201cFrequ\u00eancia card\u00edaca\u201d.</string>
+
+    <string name="health_privacy_retention_title">Por quanto tempo guardamos</string>
+    <string name="health_privacy_retention_body">No celular, o FamTrack n\u00e3o guarda c\u00f3pia: ele l\u00ea os batimentos do Health Connect na hora em que voc\u00ea abre a tela. Se voc\u00ea compartilhar, fica guardado no nosso servidor um resumo por dia enquanto sua conta existir. Se a sua conta ou a sua fam\u00edlia for exclu\u00edda, esses resumos s\u00e3o apagados junto.</string>
+
+    <string name="health_privacy_steps_title">E os passos?</string>
+    <string name="health_privacy_steps_body">Os passos que aparecem nos locais n\u00e3o v\u00eam do Health Connect. Eles s\u00e3o contados pelo sensor do pr\u00f3prio celular (permiss\u00e3o \u201cAtividade f\u00edsica\u201d do Android), ficam s\u00f3 no seu aparelho e podem ser desligados em Configura\u00e7\u00f5es &gt; Privacidade &gt; Contagem de passos.</string>
+
+    <string name="health_privacy_open_hc">Abrir o Health Connect</string>
+    <string name="health_privacy_open_hc_error">N\u00e3o foi poss\u00edvel abrir o Health Connect neste aparelho.</string>
+    <string name="health_privacy_link">Como usamos seus dados de sa\u00fade</string>
+
+    <!-- Onboarding: passo da contagem de passos (Android 10+) -->
+    <string name="onboarding_activity_title">Contar seus passos</string>
+    <string name="onboarding_activity_text">Com a permiss\u00e3o \u201cAtividade f\u00edsica\u201d, o FamTrack consegue contar seus passos nos locais e mostrar quando voc\u00ea est\u00e1 a p\u00e9. Usa o sensor do pr\u00f3prio celular, gasta pouca bateria e os passos ficam s\u00f3 no seu aparelho. \u00c9 opcional.</string>
+    <string name="onboarding_activity_denied">Tudo bem! Voc\u00ea pode ativar depois em Configura\u00e7\u00f5es &gt; Privacidade &gt; Contagem de passos.</string>
+    <string name="onboarding_activity_allow">Permitir</string>
+
+    <!-- Configuracoes > Privacidade: contagem de passos -->
+    <string name="settings_steps_title">Contagem de passos</string>
+    <string name="settings_steps_on">Ativada. O FamTrack conta seus passos nos locais. Toque para gerenciar.</string>
+    <string name="settings_steps_off">Desativada. Toque para permitir que o FamTrack conte seus passos nos locais e mostre quando voc\u00ea est\u00e1 a p\u00e9.</string>
+    <string name="settings_steps_granted_toast">Pronto! A contagem de passos est\u00e1 ativada.</string>
+    <string name="settings_steps_denied_toast">Permiss\u00e3o n\u00e3o concedida. Toque de novo para abrir os ajustes do Android e ativar \u201cAtividade f\u00edsica\u201d.</string>
+
+</resources>

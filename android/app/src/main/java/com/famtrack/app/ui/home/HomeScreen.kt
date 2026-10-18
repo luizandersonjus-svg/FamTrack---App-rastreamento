@@ -67,6 +67,7 @@ import com.famtrack.app.feature.activity.Event
 import com.famtrack.app.feature.memberdetail.MemberCard
 import com.famtrack.app.feature.memberdetail.MemberCardInfo
 import com.famtrack.app.feature.memberdetail.MemberDetailBottomSheet
+import com.famtrack.app.feature.memberdetail.MemberFocusAvatar
 import com.famtrack.app.feature.memberdetail.resolveStatusText
 import com.famtrack.app.feature.onboarding.OnboardingPrefs
 import com.famtrack.app.feature.onboarding.OnboardingScreen
@@ -102,6 +103,28 @@ import java.util.concurrent.TimeUnit
 private const val MAX_SOS_ACCURACY_METERS = 250.0
 private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
+// Zoom padrão "nível de rua" (antes 15, ~3x mais longe): 16.5 mostra o nome
+// das ruas do bairro e ainda uns 3–4 quarteirões em volta, então quem está
+// perto continua aparecendo. Aplicado só ao abrir o app, no botão "Minha
+// localização" e no SOS — entre um fix e outro o zoom escolhido na pinça fica.
+private const val DEFAULT_STREET_ZOOM = 16.5f
+// Zoom mínimo ao focar um membro pelo avatar: o mesmo nível de rua.
+private const val MEMBER_FOCUS_ZOOM = DEFAULT_STREET_ZOOM
+// Último fix salvo mais velho que isto pode ser de outro lugar (viagem): a
+// câmera nasce num zoom de cidade até chegar uma posição nova.
+private const val STALE_START_FIX_MS = 6 * 60 * 60_000L
+private const val CITY_ZOOM = 12f
+// Sem nenhum fix salvo (1º uso): Brasil inteiro, em vez do (0,0) no Atlântico.
+private const val FALLBACK_START_LAT = -14.235
+private const val FALLBACK_START_LON = -51.925
+private const val FALLBACK_START_ZOOM = 3.5f
+// Seguindo a si mesmo: arrastar o mapa a mais que isto (dp) da própria
+// posição solta a câmera; pinçar/arrastar pouco mantém o "seguir".
+private const val SELF_FOLLOW_RELEASE_DP = 80f
+// Fix salvo com até esta idade é usado como posição inicial ao recriar a Home.
+private const val RECENT_FIX_SEED_MS = 2 * 60_000L
+// Quantos avatares cabem na barra recolhida de membros antes do "+N".
+private const val BAR_MAX_AVATARS = 3
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 private const val LAYER_EVENTS_LIMIT = 20L
 // PROBLEMA 2: raio (metros) para agrupar eventos no MESMO local. Vários eventos
@@ -128,6 +151,46 @@ private val TRAIL_PALETTE = listOf(
     Color(0xFF6D4C41)  // marrom
 )
 
+/** TRACK-2: padrão tracejado do trecho de GPS bruto (provisório/aproximado). */
+private val TRAIL_PROVISIONAL_PATTERN = listOf(
+    com.google.android.gms.maps.model.Dash(24f),
+    com.google.android.gms.maps.model.Gap(14f)
+)
+
+/**
+ * TRACK-2: pedaços a desenhar para um membro. Usa o encaixe nas ruas quando
+ * existe e completa com os pontos brutos que chegaram depois do último
+ * encaixe (tracejados). Sem encaixe ainda, desenha tudo em bruto tracejado.
+ */
+private fun trailPiecesForDrawing(
+    segments: List<List<TrailPoint>>,
+    snapped: SnappedTrail?
+): List<TrailPiece> {
+    fun toLatLng(p: TrailPoint) = com.google.android.gms.maps.model.LatLng(p.latitude, p.longitude)
+    // Encaixe anterior ao primeiro ponto atual (rastro limpo ou virada do dia)
+    // não pertence a este rastro: ignora até o próximo processamento.
+    val firstTs = segments.firstOrNull { it.size >= 2 }?.firstOrNull()?.recordedAt
+    if (snapped == null || snapped.pieces.isEmpty() ||
+        (firstTs != null && snapped.coveredUntil < firstTs)
+    ) {
+        return segments.filter { it.size >= 2 }.map { seg -> TrailPiece(seg.map(::toLatLng), onRoad = false) }
+    }
+    val out = snapped.pieces.toMutableList()
+    val lastSeg = segments.lastOrNull { it.size >= 2 } ?: return out
+    val newer = lastSeg.filter { it.recordedAt > snapped.coveredUntil }
+    if (newer.isNotEmpty()) {
+        // Liga o fim do último pedaço desenhado aos pontos mais novos, desde que
+        // sejam do mesmo trecho (o ponto anterior a eles já estava coberto).
+        val firstNewIdx = lastSeg.indexOf(newer.first())
+        val anchor = lastSeg.getOrNull(firstNewIdx - 1)
+            ?.takeIf { it.recordedAt <= snapped.coveredUntil }
+            ?.let { out.lastOrNull()?.points?.lastOrNull() }
+        val pts = listOfNotNull(anchor) + newer.map(::toLatLng)
+        if (pts.size >= 2) out += TrailPiece(pts, onRoad = false)
+    }
+    return out
+}
+
 /** Cor estável por membro: hash determinístico do userId sobre a paleta. */
 private fun trailColorForMember(userId: String): Color {
     val idx = Math.floorMod(userId.hashCode(), TRAIL_PALETTE.size)
@@ -147,7 +210,11 @@ fun HomeScreen(
     onNavigateToPrivacy: () -> Unit,
     onNavigateToRoutes: () -> Unit,
     onNavigateToMemberHistory: (String) -> Unit,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    // Usuário sem família: "Entrar com código" (tela de convite) e família
+    // recém-criada (recarrega a Home já com a família).
+    onNavigateToJoinFamily: () -> Unit = {},
+    onFamilyReady: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -158,14 +225,20 @@ fun HomeScreen(
 
     var hasLocationPermission by remember {
         mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
+            hasAnyLocationPermission(context)
         )
     }
 
-    var currentLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    // Começa com o último fix salvo, se recente (≤ 2 min): ao voltar de outra
+    // aba (Histórico, Configurações) a Home é recriada e, sem isso, mostrava
+    // "Carregando localização" por ~20 s até o próximo fix do FLP.
+    var currentLocation by remember {
+        mutableStateOf<Pair<Double, Double>?>(
+            LocationFixStore.load(context)
+                ?.takeIf { System.currentTimeMillis() - it.fixAtMillis in 0..RECENT_FIX_SEED_MS }
+                ?.let { it.latitude to it.longitude }
+        )
+    }
     var currentFix by remember { mutableStateOf<SosFix?>(null) }
     var familyLocations by remember { mutableStateOf<List<FamLocation>>(emptyList()) }
     var activeSosAlerts by remember { mutableStateOf<List<com.famtrack.app.data.model.SosAlert>>(emptyList()) }
@@ -203,6 +276,11 @@ fun HomeScreen(
     var trailPolylines by remember {
         mutableStateOf<Map<String, List<List<TrailPoint>>>>(emptyMap())
     }
+    // TRACK-2: rastro encaixado nas ruas (LiveTrailMatcher). Enquanto um membro
+    // ainda não tem encaixe, o desenho usa os pontos brutos de trailPolylines.
+    var snappedTrails by remember {
+        mutableStateOf<Map<String, SnappedTrail>>(emptyMap())
+    }
     var showLegend by remember { mutableStateOf(false) }
     var mapBaseType by remember {
         mutableStateOf(MapLayerPrefs.getBaseType(context))
@@ -215,12 +293,24 @@ fun HomeScreen(
     var memberStatuses by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var selectedMember by remember { mutableStateOf<FamLocation?>(null) }
     var checkoutBusy by remember { mutableStateOf(false) }
-    var onboardingPending by remember { mutableStateOf(true) }
+    // null = ainda lendo a preferência (DataStore): não mostra o onboarding
+    // "piscando" a cada entrada na Home de quem já o concluiu.
+    // true só quando o servidor confirmou que o usuário não está em nenhuma
+    // família (falha de rede NÃO conta: não oferece criar família por engano).
+    var noFamily by remember { mutableStateOf(false) }
+    var showCreateFamily by remember { mutableStateOf(false) }
+    var creatingFamily by remember { mutableStateOf(false) }
+    var onboardingPending by remember { mutableStateOf<Boolean?>(null) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var membersPanelExpanded by remember { mutableStateOf(false) }
     var layersSheetOpen by remember { mutableStateOf(false) }
-    var skipNextCameraFollow by remember { mutableStateOf(false) }
+    // Foco em membro: ao tocar no avatar de outro membro, o mapa voa até ele e
+    // passa a segui-lo (em vez de seguir o próprio usuário). Arrastar o mapa
+    // solta o foco e deixa a câmera livre até "Minha localização" ser tocado.
+    var followedMemberId by remember { mutableStateOf<String?>(null) }
+    var followRequest by remember { mutableStateOf(0) }
+    var cameraFree by remember { mutableStateOf(false) }
     // ETAPA 7 — observabilidade: relógio para reavaliar o "sinal cortado" dos
     // membros (um membro sem atualizações não gera eventos de Realtime).
     var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -230,27 +320,21 @@ fun HomeScreen(
     }
 
     // Agenda (de forma unica e permanente) a checagem periodica de geofences.
-    // ETAPA 8C: cadencia 5 min (era 15) e politica UPDATE para substituir o
-    // agendamento antigo; o worker avalia apenas os demais membros (o proprio
-    // usuario usa a avaliacao por fix do LocationService).
+    // 15 min = minimo do WorkManager (5 era arredondado para 15). Politica UPDATE
+    // substitui o agendamento antigo. Ver GeofenceWorker (fila + repasse de alertas).
     LaunchedEffect(familyId) {
-        if (familyId != null) {
-            val workRequest = PeriodicWorkRequestBuilder<GeofenceWorker>(
-                5, TimeUnit.MINUTES
-            ).setConstraints(
-                Constraints.Builder()
-                    .setRequiredNetworkType(NetworkType.CONNECTED)
-                    .build()
-            ).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                "geofence_check",
-                ExistingPeriodicWorkPolicy.UPDATE,
-                workRequest
-            )
-        }
+        if (familyId != null) GeofenceWorker.schedule(context)
     }
 
-    if (onboardingPending) {
+    if (onboardingPending == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        )
+        return
+    }
+    if (onboardingPending == true) {
         OnboardingScreen(
             onFinished = {
                 scope.launch { onboardingPending = false }
@@ -261,7 +345,13 @@ fun HomeScreen(
 
     val tabs = listOf("Mapa", "Histórico", "Alertas", "Configurações")
 
-    val cameraPositionState = rememberCameraPositionState()
+    // A câmera já nasce na última posição conhecida (LocationFixStore), sem o
+    // "voo" a partir do (0,0) enquanto o GPS não responde. É salva entre telas
+    // (rememberSaveable por dentro): voltar das Configurações não a reposiciona.
+    val cameraPositionState = rememberCameraPositionState {
+        position = initialCameraPosition(LocationFixStore.load(context))
+    }
+    val cameraSession = com.famtrack.app.util.MapCameraSession
 
     // Callback do FLP da própria tela. Antes nunca era removido: cada entrada
     // na Home registrava mais um (alta precisão, 3s), que seguia vivo em
@@ -290,6 +380,48 @@ fun HomeScreen(
             currentFix = fix
             LocationFixStore.save(context, fix)
         }
+        // Fonte rápida enquanto o 1º fix novo não chega: o último local do FLP
+        // (mantido quente pelo LocationService) costuma responder em ms. Só
+        // posiciona a câmera — o fix novo confirma a centralização de abertura.
+        seedCameraFromLastLocation(context) { location ->
+            if (currentLocation == null &&
+                cameraSession.isOpenCenteringPending() &&
+                followedMemberId == null &&
+                System.currentTimeMillis() - location.time <= STALE_START_FIX_MS
+            ) {
+                cameraPositionState.position = cameraPositionAt(
+                    cameraPositionState.position, location.latitude, location.longitude,
+                    DEFAULT_STREET_ZOOM
+                )
+            }
+        }
+    }
+
+    // O FLP da tela (alta precisão, 3 s) só faz sentido com o app visível: com o
+    // app em segundo plano a Home continua composta e ele rodaria em paralelo ao
+    // do LocationService, gastando bateria. Desliga em ON_STOP, religa em ON_START.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val currentStartUiLocationUpdates by rememberUpdatedState(startUiLocationUpdates)
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    uiLocationCallback?.let {
+                        LocationServices.getFusedLocationProviderClient(context)
+                            .removeLocationUpdates(it)
+                    }
+                    uiLocationCallback = null
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                    if (uiLocationCallback == null && hasAnyLocationPermission(context)) {
+                        currentStartUiLocationUpdates()
+                    }
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -322,6 +454,7 @@ fun HomeScreen(
             if (user != null) {
                 userId = user.id
                 val member = familyRepository.getUserFamily(user.id)
+                noFamily = member == null
                 if (member != null) {
                     familyId = member.family_id
                     familyLocations = locationRepository.getFamilyLocations(member.family_id)
@@ -368,32 +501,137 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(currentLocation) {
-        if (skipNextCameraFollow) {
-            skipNextCameraFollow = false
+    // Clique na notificação de SOS: centraliza o mapa no alerta. Consome a cada
+    // volta ao foreground (MainActivity.onResume), inclusive com a Home já
+    // aberta. Solta a câmera (cameraFree) para o próximo fix não puxar o mapa
+    // de volta ao usuário; "Minha localização" retoma o seguir.
+    // Declarado ANTES do seguir a própria posição: na mesma volta ao app, o SOS
+    // marca a abertura como feita antes de a centralização de abertura rodar.
+    val foregroundTick by cameraSession.foregroundTicks.collectAsState()
+    LaunchedEffect(foregroundTick) {
+        SosDeepLink.consume()?.let { (lat, lon) ->
+            followedMemberId = null
+            cameraFree = true
+            cameraSession.markOpenCenteringDone()
+            moveCameraTo(cameraPositionState, lat, lon, DEFAULT_STREET_ZOOM, 1000)
+        }
+    }
+    // Gesto do usuário em andamento enquanto segue a própria posição: os fixes
+    // não mexem na câmera até o dedo soltar (não briga com o arrastar/pinçar).
+    var selfGestureActive by remember { mutableStateOf(false) }
+    var gestureStartTarget by remember {
+        mutableStateOf<com.google.android.gms.maps.model.LatLng?>(null)
+    }
+    val openCenteringPending by cameraSession.openCenteringPending.collectAsState()
+    LaunchedEffect(currentLocation, openCenteringPending) {
+        val (lat, lon) = currentLocation ?: return@LaunchedEffect
+        if (cameraSession.isOpenCenteringPending()) {
+            // App acabou de abrir (ou voltou do background): abre direto no
+            // usuário, no zoom de rua — salto instantâneo, sem voo pelo mapa.
+            cameraSession.markOpenCenteringDone()
+            // Seguindo outro membro: respeita o foco escolhido.
+            if (followedMemberId != null) return@LaunchedEffect
+            cameraFree = false
+            cameraPositionState.position = cameraPositionAt(
+                cameraPositionState.position, lat, lon, DEFAULT_STREET_ZOOM
+            )
+            return@LaunchedEffect
+        }
+        // Seguindo outro membro, câmera solta pelo usuário ou dedo no mapa:
+        // não volta para a própria posição a cada fix.
+        if (followedMemberId != null || cameraFree || selfGestureActive) return@LaunchedEffect
+        // Seguindo a si mesmo: só reposiciona, mantendo o zoom escolhido na pinça.
+        moveCameraTo(cameraPositionState, lat, lon, zoom = null, animateMs = 600)
+    }
+    // Foco em membro — posição atual do membro seguido (atualizada pelo Realtime).
+    val followedTarget: Pair<Double, Double>? = followedMemberId?.let { id ->
+        familyLocations.firstOrNull { it.user_id == id }?.let { it.latitude to it.longitude }
+    }
+    // Primeiro movimento de cada pedido de foco aproxima o zoom; os seguintes
+    // (o membro andando) só reposicionam, mantendo o zoom que o usuário escolheu.
+    var zoomedForRequest by remember { mutableStateOf(-1) }
+    LaunchedEffect(followRequest, followedTarget) {
+        if (followedMemberId == null) return@LaunchedEffect
+        val (lat, lon) = followedTarget ?: return@LaunchedEffect
+        val latLng = com.google.android.gms.maps.model.LatLng(lat, lon)
+        val update = if (zoomedForRequest != followRequest) {
+            zoomedForRequest = followRequest
+            CameraUpdateFactory.newLatLngZoom(
+                latLng,
+                maxOf(cameraPositionState.position.zoom, MEMBER_FOCUS_ZOOM)
+            )
         } else {
-            currentLocation?.let { (lat, lon) ->
-                cameraPositionState.animate(
-                    CameraUpdateFactory.newLatLngZoom(
-                        com.google.android.gms.maps.model.LatLng(lat, lon),
-                        15f
-                    ),
-                    1000
+            CameraUpdateFactory.newLatLng(latLng)
+        }
+        cameraPositionState.animate(update, 900)
+    }
+    // Gestos no mapa. A chave inclui o motivo: um gesto que interrompe uma
+    // animação nossa troca o motivo sem isMoving voltar a false.
+    // - Seguindo outro membro: arrastar/pinçar solta o foco (olhar em volta).
+    // - Seguindo a si mesmo: ao soltar o dedo, se a própria posição ficou longe
+    //   do centro (arrastou o mapa), a câmera fica livre até "Minha
+    //   localização"; pinçar ou arrastar pouco continua seguindo.
+    LaunchedEffect(cameraPositionState.isMoving, cameraPositionState.cameraMoveStartedReason) {
+        val byGesture =
+            cameraPositionState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE
+        if (cameraPositionState.isMoving) {
+            if (!byGesture) return@LaunchedEffect
+            if (followedMemberId != null) {
+                followedMemberId = null
+                cameraFree = true
+            } else if (!cameraFree && !selfGestureActive) {
+                selfGestureActive = true
+                gestureStartTarget = cameraPositionState.position.target
+            }
+        } else if (selfGestureActive) {
+            selfGestureActive = false
+            val anchor = currentLocation
+                ?.let { (lat, lon) -> com.google.android.gms.maps.model.LatLng(lat, lon) }
+                ?: gestureStartTarget
+            gestureStartTarget = null
+            val projection = cameraPositionState.projection
+            if (anchor != null && projection != null && !cameraFree && followedMemberId == null) {
+                val p = projection.toScreenLocation(anchor)
+                val c = projection.toScreenLocation(cameraPositionState.position.target)
+                val distPx = Math.hypot((p.x - c.x).toDouble(), (p.y - c.y).toDouble())
+                if (distPx > SELF_FOLLOW_RELEASE_DP * context.resources.displayMetrics.density) {
+                    cameraFree = true
+                    // Explorou o mapa antes do 1º fix: não puxa de volta ao chegar.
+                    cameraSession.markOpenCenteringDone()
+                }
+            }
+        }
+    }
+    // Volta a seguir a própria posição (botão "Minha localização" ou o próprio
+    // avatar): zoom de rua (ou mais perto, se o usuário já estava mais perto).
+    val focusSelf: () -> Unit = {
+        followedMemberId = null
+        cameraFree = false
+        cameraSession.markOpenCenteringDone()
+        val target = currentLocation
+            ?: LocationFixStore.load(context)?.let { it.latitude to it.longitude }
+        target?.let { (lat, lon) ->
+            scope.launch {
+                moveCameraTo(
+                    cameraPositionState, lat, lon,
+                    maxOf(cameraPositionState.position.zoom, DEFAULT_STREET_ZOOM),
+                    500
                 )
             }
         }
     }
-    // Clique na notificação de SOS: centraliza o mapa no alerta uma única vez.
-    LaunchedEffect(Unit) {
-        SosDeepLink.consume()?.let { (lat, lon) ->
-            skipNextCameraFollow = true
-            cameraPositionState.animate(
-                CameraUpdateFactory.newLatLngZoom(
-                    com.google.android.gms.maps.model.LatLng(lat, lon),
-                    15f
-                ),
-                1000
+    val focusMember: (String) -> Unit = { memberId ->
+        if (memberId == userId) {
+            focusSelf()
+        } else if (familyLocations.none { it.user_id == memberId }) {
+            sosMessage = context.getString(
+                R.string.home_focus_no_location,
+                memberInfos[memberId]?.display_name ?: "Membro"
             )
+        } else {
+            followedMemberId = memberId
+            cameraFree = false
+            followRequest++
         }
     }
     // Localização em tempo real: o canal Realtime do Supabase empurra cada
@@ -436,6 +674,34 @@ fun HomeScreen(
                 trailPolylines = LiveTrailStore.snapshot()
             }
             kotlinx.coroutines.delay(2_000L)
+        }
+    }
+
+    // TRACK-2: encaixa o rastro nas ruas em segundo plano. Lê sempre o snapshot
+    // mais recente; o matcher só consulta o servidor para blocos novos ou para o
+    // trecho final (no máximo a cada 15 s por membro), então o laço é barato.
+    val latestTrails by rememberUpdatedState(trailPolylines)
+    LaunchedEffect(layerTrail) {
+        if (!layerTrail) return@LaunchedEffect
+        var seen: Map<String, List<List<TrailPoint>>>? = null
+        var lastRunMs = 0L
+        while (true) {
+            val current = latestTrails
+            val now = android.os.SystemClock.elapsedRealtime()
+            // Roda quando há pontos novos, ou a cada 15 s (repete trechos que falharam).
+            if (current !== seen || now - lastRunMs >= 15_000L) {
+                seen = current
+                lastRunMs = now
+                snappedTrails = try {
+                    LiveTrailMatcher.snap(current)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("FamTrackTrailSnap", "encaixe falhou: ${e.localizedMessage?.take(80)}")
+                    snappedTrails
+                }
+            }
+            delay(3_000L)
         }
     }
 
@@ -687,16 +953,24 @@ fun HomeScreen(
                 if (level != null && level < 20) {
                     val key = "${loc.user_id}_$today"
                     if (!prefs.getBoolean(key, false)) {
-                        ActivityRepository().recordEvent(
-                            Event(
-                                family_id = fid,
-                                type = "LOW_BATTERY",
-                                member_id = loc.user_id,
-                                lat = loc.latitude,
-                                lng = loc.longitude
+                        // Sem rede/RLS, o registro falha: não pode derrubar o app.
+                        // Só marca o dia como registrado se o evento foi gravado.
+                        try {
+                            ActivityRepository().recordEvent(
+                                Event(
+                                    family_id = fid,
+                                    type = "LOW_BATTERY",
+                                    member_id = loc.user_id,
+                                    lat = loc.latitude,
+                                    lng = loc.longitude
+                                )
                             )
-                        )
-                        prefs.edit().putBoolean(key, true).apply()
+                            prefs.edit().putBoolean(key, true).apply()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w("HomeScreen", "Falha ao registrar bateria fraca", e)
+                        }
                     }
                 }
             }
@@ -1217,29 +1491,23 @@ label = {
                 if (layerTrail) {
                     // Rastro ao vivo (TRACK-1c): polyline por membro com os pontos já
                     // filtrados/decimados pelo LiveTrailStore e cor estável por membro.
-                    trailPolylines.forEach { (uid, segments) ->
-                        val drawable = segments.filter { it.size >= 2 }
-                        if (drawable.isNotEmpty()) {
-                            Log.d(
-                                "FamTrackTrailUI",
-                                "desenhando polyline: user=${uid.take(8)} " +
-                                    "segmentos=${drawable.size} pontos=${drawable.sumOf { it.size }}"
-                            )
-                            drawable.forEach { seg ->
-                                Polyline(
-                                    points = seg.map {
-                                        com.google.android.gms.maps.model.LatLng(
-                                            it.latitude,
-                                            it.longitude
-                                        )
-                                    },
-                                    color = trailColorForMember(uid),
-                                    width = 8f,
-                                    zIndex = 0.4f
-                                )
-                            }
-                        }
+                    // TRACK-2: trechos encaixados nas ruas em linha cheia; GPS bruto
+                    // (ainda não processado ou não encaixável) em linha tracejada.
+                    // Largura acompanha o zoom para ocupar a largura da rua
+                    // (LiveTrailOverlay.kt); a leitura da câmera fica isolada lá,
+                    // então dar zoom recompõe só o rastro, não os marcadores.
+                    val memberTrails = trailPolylines.map { (uid, segments) ->
+                        MemberTrail(
+                            color = trailColorForMember(uid),
+                            pieces = trailPiecesForDrawing(segments, snappedTrails[uid])
+                        )
                     }
+                    LiveTrailPolylines(
+                        trails = memberTrails,
+                        cameraPositionState = cameraPositionState,
+                        density = markerDensity,
+                        provisionalBasePattern = TRAIL_PROVISIONAL_PATTERN
+                    )
                 }
             }
 
@@ -1270,7 +1538,10 @@ label = {
                         layerTrail = on
                         MapLayerPrefs.setOn(context, MapLayer.TRAIL, on)
                     },
-                    onClearTrail = { LiveTrailStore.clearToday() },
+                    onClearTrail = {
+                        LiveTrailStore.clearToday()
+                        snappedTrails = emptyMap()
+                    },
                     onShowLegend = { showLegend = !showLegend },
                     onDismiss = { layersSheetOpen = false },
                     members = familyLocations
@@ -1357,6 +1628,65 @@ label = {
                                     }
                                 ) {
                                     Text(stringResource(R.string.home_location_perm_action))
+                                }
+                            }
+                        }
+                    }
+                }
+                noFamily -> {
+                    // Usuário novo (sem família): caminho claro para começar.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Filled.GroupAdd,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = stringResource(R.string.home_no_family_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = stringResource(R.string.home_no_family_text),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Button(
+                                    onClick = { showCreateFamily = true },
+                                    enabled = !creatingFamily,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.home_no_family_create))
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = onNavigateToJoinFamily,
+                                    enabled = !creatingFamily,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.home_no_family_join))
                                 }
                             }
                         }
@@ -1579,6 +1909,8 @@ label = {
                                         signalLost = signalLost
                                     ),
                                     onClick = { selectedMember = loc },
+                                    onAvatarClick = { focusMember(loc.user_id) },
+                                    highlighted = followedMemberId == loc.user_id,
                                     modifier = Modifier.width(240.dp)
                                 )
                             }
@@ -1611,7 +1943,22 @@ label = {
                                 )
                                 val selId = selectedMember?.user_id
                                 val selName = selId?.let { memberInfos[it]?.display_name }
-                                if (selName != null) {
+                                val followedName = followedMemberId?.let {
+                                    memberInfos[it]?.display_name ?: "Membro"
+                                }
+                                if (followedName != null) {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.home_following_member,
+                                            followedName
+                                        ),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else if (selName != null) {
                                     Text(
                                         text = context.getString(
                                             R.string.home_panel_member_format,
@@ -1639,6 +1986,62 @@ label = {
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                }
+                            }
+                            // Atalho de foco: avatares dos outros membros direto na
+                            // barra recolhida — um toque leva o mapa até a pessoa,
+                            // sem precisar expandir a lista nem procurar no mapa.
+                            if (!membersPanelExpanded) {
+                                val others = carouselOrder.filter { it.user_id != userId }
+                                if (others.isNotEmpty()) {
+                                    val shown = if (others.size > BAR_MAX_AVATARS) {
+                                        others.take(BAR_MAX_AVATARS - 1)
+                                    } else {
+                                        others
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy((-8).dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        shown.forEach { loc ->
+                                            val info = memberInfos[loc.user_id]
+                                            MemberFocusAvatar(
+                                                name = info?.display_name ?: "Membro",
+                                                avatarUrl = info?.avatar_url,
+                                                focused = followedMemberId == loc.user_id,
+                                                onClick = { focusMember(loc.user_id) },
+                                                size = 36.dp
+                                            )
+                                        }
+                                        val hidden = others.size - shown.size
+                                        if (hidden > 0) {
+                                            val moreLabel = stringResource(R.string.home_focus_more_cd)
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .clip(CircleShape)
+                                                    .clickable(onClickLabel = moreLabel) {
+                                                        membersPanelExpanded = true
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                                    modifier = Modifier.size(36.dp)
+                                                ) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Text(
+                                                            text = "+$hidden",
+                                                            style = MaterialTheme.typography.labelLarge,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             Spacer(modifier = Modifier.width(8.dp))
@@ -1702,19 +2105,7 @@ label = {
                     modifier = Modifier.size(56.dp)
                 ) {
                     IconButton(
-                        onClick = {
-                            currentLocation?.let { (lat, lon) ->
-                                scope.launch {
-                                    cameraPositionState.animate(
-                                        CameraUpdateFactory.newLatLngZoom(
-                                            com.google.android.gms.maps.model.LatLng(lat, lon),
-                                            15f
-                                        ),
-                                        500
-                                    )
-                                }
-                            }
-                        },
+                        onClick = focusSelf,
                         modifier = Modifier.size(56.dp)
                     ) {
                         Icon(
@@ -1799,6 +2190,35 @@ label = {
         }
     }
 
+    if (showCreateFamily) {
+        com.famtrack.app.ui.geofence.CreateFamilyDialog(
+            onDismiss = { showCreateFamily = false },
+            onCreate = { name ->
+                val trimmed = name.trim()
+                if (trimmed.isNotEmpty() && !creatingFamily) {
+                    creatingFamily = true
+                    scope.launch {
+                        try {
+                            familyRepository.createFamily(name = trimmed)
+                            showCreateFamily = false
+                            // Recarrega a Home já com a família (inicia o
+                            // compartilhamento e o carregamento normal).
+                            onFamilyReady()
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.e("HomeScreen", "Falha ao criar família", e)
+                            showCreateFamily = false
+                            sosMessage = context.getString(R.string.home_no_family_create_fail)
+                        } finally {
+                            creatingFamily = false
+                        }
+                    }
+                }
+            }
+        )
+    }
+
     selectedMember?.let { member ->
         val info = memberInfos[member.user_id]
         MemberDetailBottomSheet(
@@ -1868,14 +2288,102 @@ private fun startSharingService(
 ) {
     if (userId == null || familyId == null) return
 
-    if (ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-    ) {
+    // FINE ou COARSE: com "localização aproximada" (Android 12+) também funciona.
+    if (hasAnyLocationPermission(context)) {
         LocationService.startService(context, familyId, userId)
     }
 }
+
+/**
+ * Posição inicial da câmera ao montar a Home: último fix salvo no zoom de rua;
+ * fix velho (pode ser de outra cidade) num zoom de cidade; sem fix, o Brasil.
+ */
+private fun initialCameraPosition(
+    lastFix: SosFix?
+): com.google.android.gms.maps.model.CameraPosition {
+    if (lastFix == null) {
+        return com.google.android.gms.maps.model.CameraPosition.fromLatLngZoom(
+            com.google.android.gms.maps.model.LatLng(FALLBACK_START_LAT, FALLBACK_START_LON),
+            FALLBACK_START_ZOOM
+        )
+    }
+    val ageMs = System.currentTimeMillis() - lastFix.fixAtMillis
+    val zoom = if (ageMs in 0..STALE_START_FIX_MS) DEFAULT_STREET_ZOOM else CITY_ZOOM
+    return com.google.android.gms.maps.model.CameraPosition.fromLatLngZoom(
+        com.google.android.gms.maps.model.LatLng(lastFix.latitude, lastFix.longitude),
+        zoom
+    )
+}
+
+/** Mesma câmera (inclinação/rotação) apontada para (lat, lon) no zoom dado. */
+private fun cameraPositionAt(
+    current: com.google.android.gms.maps.model.CameraPosition,
+    lat: Double,
+    lon: Double,
+    zoom: Float
+): com.google.android.gms.maps.model.CameraPosition =
+    com.google.android.gms.maps.model.CameraPosition.Builder(current)
+        .target(com.google.android.gms.maps.model.LatLng(lat, lon))
+        .zoom(zoom)
+        .build()
+
+/**
+ * Leva a câmera até (lat, lon). Destino já visível na tela: animação curta.
+ * Fora da tela (ou mapa ainda não carregado): salto direto — nada de voo longo
+ * atravessando o mapa. zoom == null mantém o zoom atual (o da pinça).
+ * O salto usa o setter de position, seguro mesmo antes de o mapa existir.
+ */
+private suspend fun moveCameraTo(
+    state: CameraPositionState,
+    lat: Double,
+    lon: Double,
+    zoom: Float?,
+    animateMs: Int
+) {
+    val target = com.google.android.gms.maps.model.LatLng(lat, lon)
+    val visible = state.projection?.visibleRegion?.latLngBounds?.contains(target) == true
+    if (visible) {
+        val update = if (zoom != null) {
+            CameraUpdateFactory.newLatLngZoom(target, zoom)
+        } else {
+            CameraUpdateFactory.newLatLng(target)
+        }
+        state.animate(update, animateMs)
+    } else {
+        state.position = cameraPositionAt(state.position, lat, lon, zoom ?: state.position.zoom)
+    }
+}
+
+/** Último local conhecido do FLP (rápido, sem ligar o GPS); ignora se não houver. */
+private fun seedCameraFromLastLocation(
+    context: Context,
+    onLocation: (Location) -> Unit
+) {
+    val granted = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    if (!granted) return
+    try {
+        LocationServices.getFusedLocationProviderClient(context).lastLocation
+            .addOnSuccessListener { location ->
+                if (location != null) onLocation(location)
+            }
+    } catch (e: SecurityException) {
+        Log.w("FamTrackCamera", "lastLocation sem permissão: ${e.localizedMessage?.take(80)}")
+    }
+}
+
+/** Localização concedida, precisa (FINE) ou aproximada (COARSE). */
+private fun hasAnyLocationPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
 
 /** Registra o FLP da tela; devolve o callback para ser removido no dispose. */
 private fun startLocationUpdates(
@@ -1901,11 +2409,8 @@ private fun startLocationUpdates(
         }
     }
 
-    if (ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-    ) {
+    // FINE ou COARSE: com "localização aproximada" (Android 12+) também funciona.
+    if (hasAnyLocationPermission(context)) {
         locationClient.requestLocationUpdates(
             locationRequest,
             locationCallback,

@@ -118,15 +118,24 @@ internal abstract class RouteTrackDatabase : RoomDatabase() {
         // Teto de linhas do cache de endereços (evita crescimento indefinido).
         private const val ADDRESS_CACHE_MAX_ROWS = 2000
 
+        @Volatile
+        private var instance: RouteTrackDatabase? = null
+
+        // Singleton por processo: antes cada chamada (AddressResolver a cada
+        // resolução de endereço, cada RoutePointStore, Telemetry) abria uma
+        // instância nova do Room que nunca era fechada (vazamento de conexões).
         fun getInstance(context: Context): RouteTrackDatabase =
-            Room.databaseBuilder(
-                context,
-                RouteTrackDatabase::class.java,
-                "route_track.db"
-            )
-                .addMigrations(MIGRATION_1_2)
-                .fallbackToDestructiveMigration(dropAllTables = true)
-                .build()
+            instance ?: synchronized(this) {
+                instance ?: Room.databaseBuilder(
+                    context.applicationContext,
+                    RouteTrackDatabase::class.java,
+                    "route_track.db"
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .build()
+                    .also { instance = it }
+            }
 
         fun addressCacheMaxRows(): Int = ADDRESS_CACHE_MAX_ROWS
     }
