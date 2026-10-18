@@ -282,7 +282,10 @@
     <string name="home_panel_expand_cd">Expandir lista de membros</string>
     <string name="home_panel_collapse_cd">Recolher lista de membros</string>
     <string name="home_panel_member_format">%1$s \u00b7 %2$s</string>
-    <string name="home_sos_active_title">ALERTA SOS ATIVO</string>
+    <string name="home_focus_member_cd">Mostrar %1$s no mapa</string>
+    <string name="home_following_member">Seguindo %1$s no mapa</string>
+    <string name="home_focus_no_location">%1$s ainda n\u00e3o tem localiza\u00e7\u00e3o no mapa</string>
+    <string name="home_focus_more_cd">Ver todos os membros</string>    <string name="home_sos_active_title">ALERTA SOS ATIVO</string>
     <string name="home_sos_time_label">Hor\u00e1rio</string>
     <string name="home_sos_location_label">Localiza\u00e7\u00e3o</string>
     <string name="home_sos_resolve">Resolver</string>

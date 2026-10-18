@@ -67,6 +67,7 @@ import com.famtrack.app.feature.activity.Event
 import com.famtrack.app.feature.memberdetail.MemberCard
 import com.famtrack.app.feature.memberdetail.MemberCardInfo
 import com.famtrack.app.feature.memberdetail.MemberDetailBottomSheet
+import com.famtrack.app.feature.memberdetail.MemberFocusAvatar
 import com.famtrack.app.feature.memberdetail.resolveStatusText
 import com.famtrack.app.feature.onboarding.OnboardingPrefs
 import com.famtrack.app.feature.onboarding.OnboardingScreen
@@ -102,6 +103,10 @@ import java.util.concurrent.TimeUnit
 private const val MAX_SOS_ACCURACY_METERS = 250.0
 private const val MAX_SOS_FIX_AGE_MILLIS = 5 * 60_000L
 private const val STALE_SIGNAL_MS = 15 * 60_000L
+// Zoom mínimo ao focar um membro pelo avatar (nível de rua).
+private const val MEMBER_FOCUS_ZOOM = 16f
+// Quantos avatares cabem na barra recolhida de membros antes do "+N".
+private const val BAR_MAX_AVATARS = 3
 private const val NOTIF_BADGE_REFRESH_MS = 60_000L
 private const val LAYER_EVENTS_LIMIT = 20L
 // PROBLEMA 2: raio (metros) para agrupar eventos no MESMO local. Vários eventos
@@ -266,6 +271,12 @@ fun HomeScreen(
     var membersPanelExpanded by remember { mutableStateOf(false) }
     var layersSheetOpen by remember { mutableStateOf(false) }
     var skipNextCameraFollow by remember { mutableStateOf(false) }
+    // Foco em membro: ao tocar no avatar de outro membro, o mapa voa até ele e
+    // passa a segui-lo (em vez de seguir o próprio usuário). Arrastar o mapa
+    // solta o foco e deixa a câmera livre até "Minha localização" ser tocado.
+    var followedMemberId by remember { mutableStateOf<String?>(null) }
+    var followRequest by remember { mutableStateOf(0) }
+    var cameraFree by remember { mutableStateOf(false) }
     // ETAPA 7 — observabilidade: relógio para reavaliar o "sinal cortado" dos
     // membros (um membro sem atualizações não gera eventos de Realtime).
     var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -416,6 +427,9 @@ fun HomeScreen(
     LaunchedEffect(currentLocation) {
         if (skipNextCameraFollow) {
             skipNextCameraFollow = false
+        } else if (followedMemberId != null || cameraFree) {
+            // Seguindo outro membro (ou câmera solta pelo usuário): não volta
+            // para a própria posição a cada fix.
         } else {
             currentLocation?.let { (lat, lon) ->
                 cameraPositionState.animate(
@@ -439,6 +453,68 @@ fun HomeScreen(
                 ),
                 1000
             )
+        }
+    }
+    // Foco em membro — posição atual do membro seguido (atualizada pelo Realtime).
+    val followedTarget: Pair<Double, Double>? = followedMemberId?.let { id ->
+        familyLocations.firstOrNull { it.user_id == id }?.let { it.latitude to it.longitude }
+    }
+    // Primeiro movimento de cada pedido de foco aproxima o zoom; os seguintes
+    // (o membro andando) só reposicionam, mantendo o zoom que o usuário escolheu.
+    var zoomedForRequest by remember { mutableStateOf(-1) }
+    LaunchedEffect(followRequest, followedTarget) {
+        if (followedMemberId == null) return@LaunchedEffect
+        val (lat, lon) = followedTarget ?: return@LaunchedEffect
+        val latLng = com.google.android.gms.maps.model.LatLng(lat, lon)
+        val update = if (zoomedForRequest != followRequest) {
+            zoomedForRequest = followRequest
+            CameraUpdateFactory.newLatLngZoom(
+                latLng,
+                maxOf(cameraPositionState.position.zoom, MEMBER_FOCUS_ZOOM)
+            )
+        } else {
+            CameraUpdateFactory.newLatLng(latLng)
+        }
+        cameraPositionState.animate(update, 900)
+    }
+    // Arrastar/pinçar o mapa solta o foco: o usuário quer olhar em volta.
+    LaunchedEffect(cameraPositionState.isMoving) {
+        if (cameraPositionState.isMoving &&
+            cameraPositionState.cameraMoveStartedReason == CameraMoveStartedReason.GESTURE &&
+            followedMemberId != null
+        ) {
+            followedMemberId = null
+            cameraFree = true
+        }
+    }
+    // Volta a seguir a própria posição (botão "Minha localização" ou o próprio avatar).
+    val focusSelf: () -> Unit = {
+        followedMemberId = null
+        cameraFree = false
+        currentLocation?.let { (lat, lon) ->
+            scope.launch {
+                cameraPositionState.animate(
+                    CameraUpdateFactory.newLatLngZoom(
+                        com.google.android.gms.maps.model.LatLng(lat, lon),
+                        15f
+                    ),
+                    500
+                )
+            }
+        }
+    }
+    val focusMember: (String) -> Unit = { memberId ->
+        if (memberId == userId) {
+            focusSelf()
+        } else if (familyLocations.none { it.user_id == memberId }) {
+            sosMessage = context.getString(
+                R.string.home_focus_no_location,
+                memberInfos[memberId]?.display_name ?: "Membro"
+            )
+        } else {
+            followedMemberId = memberId
+            cameraFree = false
+            followRequest++
         }
     }
     // Localização em tempo real: o canal Realtime do Supabase empurra cada
@@ -1649,6 +1725,8 @@ label = {
                                         signalLost = signalLost
                                     ),
                                     onClick = { selectedMember = loc },
+                                    onAvatarClick = { focusMember(loc.user_id) },
+                                    highlighted = followedMemberId == loc.user_id,
                                     modifier = Modifier.width(240.dp)
                                 )
                             }
@@ -1681,7 +1759,22 @@ label = {
                                 )
                                 val selId = selectedMember?.user_id
                                 val selName = selId?.let { memberInfos[it]?.display_name }
-                                if (selName != null) {
+                                val followedName = followedMemberId?.let {
+                                    memberInfos[it]?.display_name ?: "Membro"
+                                }
+                                if (followedName != null) {
+                                    Text(
+                                        text = stringResource(
+                                            R.string.home_following_member,
+                                            followedName
+                                        ),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else if (selName != null) {
                                     Text(
                                         text = context.getString(
                                             R.string.home_panel_member_format,
@@ -1709,6 +1802,62 @@ label = {
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                }
+                            }
+                            // Atalho de foco: avatares dos outros membros direto na
+                            // barra recolhida — um toque leva o mapa até a pessoa,
+                            // sem precisar expandir a lista nem procurar no mapa.
+                            if (!membersPanelExpanded) {
+                                val others = carouselOrder.filter { it.user_id != userId }
+                                if (others.isNotEmpty()) {
+                                    val shown = if (others.size > BAR_MAX_AVATARS) {
+                                        others.take(BAR_MAX_AVATARS - 1)
+                                    } else {
+                                        others
+                                    }
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy((-8).dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        shown.forEach { loc ->
+                                            val info = memberInfos[loc.user_id]
+                                            MemberFocusAvatar(
+                                                name = info?.display_name ?: "Membro",
+                                                avatarUrl = info?.avatar_url,
+                                                focused = followedMemberId == loc.user_id,
+                                                onClick = { focusMember(loc.user_id) },
+                                                size = 36.dp
+                                            )
+                                        }
+                                        val hidden = others.size - shown.size
+                                        if (hidden > 0) {
+                                            val moreLabel = stringResource(R.string.home_focus_more_cd)
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .clip(CircleShape)
+                                                    .clickable(onClickLabel = moreLabel) {
+                                                        membersPanelExpanded = true
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                                    modifier = Modifier.size(36.dp)
+                                                ) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Text(
+                                                            text = "+$hidden",
+                                                            style = MaterialTheme.typography.labelLarge,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             Spacer(modifier = Modifier.width(8.dp))
@@ -1772,19 +1921,7 @@ label = {
                     modifier = Modifier.size(56.dp)
                 ) {
                     IconButton(
-                        onClick = {
-                            currentLocation?.let { (lat, lon) ->
-                                scope.launch {
-                                    cameraPositionState.animate(
-                                        CameraUpdateFactory.newLatLngZoom(
-                                            com.google.android.gms.maps.model.LatLng(lat, lon),
-                                            15f
-                                        ),
-                                        500
-                                    )
-                                }
-                            }
-                        },
+                        onClick = focusSelf,
                         modifier = Modifier.size(56.dp)
                     ) {
                         Icon(
