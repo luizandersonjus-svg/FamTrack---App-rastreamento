@@ -29,6 +29,8 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.NearMe
@@ -95,6 +97,7 @@ import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
+import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.rememberCameraPositionState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -171,6 +174,11 @@ fun DeliveryMapScreen(
     // Localização ao vivo (só com a tela visível).
     var hasLocation by remember { mutableStateOf(hasLocationPermission(context)) }
     var myPosition by remember { mutableStateOf<LatLng?>(null) }
+    // Veículo no lugar do ponto azul: para onde aponta e a precisão do GPS.
+    var myHeading by remember { mutableStateOf<Float?>(null) }
+    var myAccuracy by remember { mutableStateOf<Float?>(null) }
+    var vehicleType by remember { mutableStateOf(loadVehicleType(context)) }
+    var vehicleMenuOpen by remember { mutableStateOf(false) }
     // Seguir: a câmera acompanha o entregador.
     var following by remember { mutableStateOf(true) }
     var followZoomed by remember { mutableStateOf(false) }
@@ -204,7 +212,18 @@ fun DeliveryMapScreen(
         val client = LocationServices.getFusedLocationProviderClient(context)
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let { myPosition = LatLng(it.latitude, it.longitude) }
+                result.lastLocation?.let { loc ->
+                    val to = GeoPt(loc.latitude, loc.longitude)
+                    myHeading = nextHeading(
+                        previous = myHeading,
+                        gpsBearing = if (loc.hasBearing()) loc.bearing else null,
+                        speedMps = if (loc.hasSpeed()) loc.speed else null,
+                        from = myPosition?.let { GeoPt(it.latitude, it.longitude) },
+                        to = to
+                    )
+                    myAccuracy = if (loc.hasAccuracy()) loc.accuracy else null
+                    myPosition = LatLng(loc.latitude, loc.longitude)
+                }
             }
         }
         var active = false
@@ -603,10 +622,44 @@ fun DeliveryMapScreen(
                     ),
                     properties = MapProperties(
                         mapType = MapType.NORMAL,
-                        isMyLocationEnabled = hasLocation
+                        // O veículo (abaixo) substitui o ponto azul padrão.
+                        isMyLocationEnabled = false
                     ),
                     onMapLoaded = { mapLoaded = true }
                 ) {
+                    // Entregador: carro ou moto apontando para onde está indo.
+                    myPosition?.let { pos ->
+                        val accuracy = myAccuracy
+                        if (accuracy != null && accuracy > 12f) {
+                            Circle(
+                                center = pos,
+                                radius = accuracy.toDouble(),
+                                fillColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+                                strokeColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                                strokeWidth = 1f * density,
+                                zIndex = 0.4f
+                            )
+                        }
+                        val vehicleIcon = remember(vehicleType, density) {
+                            try {
+                                BitmapDescriptorFactory.fromBitmap(buildVehicleBitmap(vehicleType, density))
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                        if (vehicleIcon != null) {
+                            Marker(
+                                state = MarkerState(position = pos),
+                                icon = vehicleIcon,
+                                anchor = Offset(0.5f, 0.5f),
+                                rotation = myHeading ?: 0f,
+                                flat = true,
+                                zIndex = 20f,
+                                title = "Você",
+                                onClick = { true }
+                            )
+                        }
+                    }
                     // Caminho: linha fina e clara + setas no sentido do trânsito.
                     if (remaining.size >= 2) {
                         Polyline(
@@ -698,6 +751,43 @@ fun DeliveryMapScreen(
                         }
                     }
                     FlagLegend(modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 12.dp, bottom = 64.dp)
+                ) {
+                    SmallFloatingActionButton(
+                        onClick = { vehicleMenuOpen = true },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary
+                    ) {
+                        Icon(
+                            if (vehicleType == VehicleType.MOTO) Icons.Filled.TwoWheeler else Icons.Filled.DirectionsCar,
+                            contentDescription = "Veículo no mapa: ${vehicleType.label}"
+                        )
+                    }
+                    DropdownMenu(expanded = vehicleMenuOpen, onDismissRequest = { vehicleMenuOpen = false }) {
+                        VehicleType.entries.forEach { type ->
+                            DropdownMenuItem(
+                                text = { Text(type.label) },
+                                leadingIcon = {
+                                    Icon(
+                                        if (type == VehicleType.MOTO) Icons.Filled.TwoWheeler else Icons.Filled.DirectionsCar,
+                                        contentDescription = null
+                                    )
+                                },
+                                trailingIcon = {
+                                    if (type == vehicleType) Icon(Icons.Filled.Check, contentDescription = null)
+                                },
+                                onClick = {
+                                    vehicleMenuOpen = false
+                                    vehicleType = type
+                                    saveVehicleType(context, type)
+                                }
+                            )
+                        }
+                    }
                 }
                 SmallFloatingActionButton(
                     onClick = { followMe() },
