@@ -1,5 +1,10 @@
 # FamTrack - Plano de Implementação
 
+> **Status (out/2026):** documento histórico. As fases 1 a 4 foram implementadas
+> e a fase 5 (polimento) está em andamento. Desde então também entraram: convites,
+> fila offline, clima, rastro ao vivo (TRACK-1) e endurecimento de RLS (SEC-1).
+> Para o estado atual veja o [README](README.md) e o histórico do git.
+
 ## 📋 Resumo do Projeto
 
 App Android nativo de rastreamento familiar com:
@@ -599,4 +604,4 @@ class LocationService : LifecycleService() {
 
 ---
 
-*Plano atualizado em: $(date)*
+*Plano original: setembro de 2026.*
