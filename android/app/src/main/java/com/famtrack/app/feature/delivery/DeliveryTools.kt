@@ -89,9 +89,11 @@ internal suspend fun geocodeDeliveryAddress(context: Context, query: String): Ge
 
 /** Última posição conhecida do aparelho, ou null sem permissão/posição. */
 internal suspend fun lastKnownPosition(context: Context): LatLng? {
-    val granted = ContextCompat.checkSelfPermission(
-        context, Manifest.permission.ACCESS_FINE_LOCATION
-    ) == PackageManager.PERMISSION_GRANTED
+    // Aproximada também serve (o entregador pode ter negado a precisa).
+    val granted = listOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    ).any { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
     if (!granted) return null
     return try {
         suspendCancellableCoroutine { cont ->
