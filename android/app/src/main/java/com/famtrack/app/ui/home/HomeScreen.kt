@@ -217,7 +217,9 @@ fun HomeScreen(
     // Usuário sem família: "Entrar com código" (tela de convite) e família
     // recém-criada (recarrega a Home já com a família).
     onNavigateToJoinFamily: () -> Unit = {},
-    onFamilyReady: () -> Unit = {}
+    onFamilyReady: () -> Unit = {},
+    // Modo Entregas (mapa de pacotes com bandeiras).
+    onNavigateToDeliveries: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -1217,6 +1219,14 @@ fun HomeScreen(
                                 onClick = {
                                     menuExpanded = false
                                     onNavigateToRoutes()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.home_action_deliveries)) },
+                                leadingIcon = { Icon(Icons.Filled.LocalShipping, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onNavigateToDeliveries()
                                 }
                             )
                             HorizontalDivider()

@@ -635,3 +635,45 @@ private fun partialSegment(raw: List<RoutePoint>): MatchedSegment =
         points = raw.map { LatLng(it.latitude, it.longitude) },
         status = RouteMatchStatus.PARTIAL
     )
+
+// ---------------------------------------------------------------------------
+// Modo Entregas: serviço /trip (ordem das paradas para rodar menos).
+// ---------------------------------------------------------------------------
+
+/**
+ * Para cada coordenada de entrada, devolve a posição dela na viagem
+ * calculada pelo OSRM (waypoint_index). A viagem começa na primeira
+ * coordenada e não precisa voltar ao início. Devolve null se o servidor
+ * falhar ou recusar; quem chama decide o plano B.
+ */
+internal suspend fun osrmTripOrder(coords: List<LatLng>): List<Int>? {
+    if (coords.size < 2) return coords.indices.toList()
+    val path = coords.joinToString(";") {
+        String.format(java.util.Locale.US, "%.6f,%.6f", it.longitude, it.latitude)
+    }
+    val url = "$OSRM_BASE_URL/trip/v1/driving/$path?source=first&roundtrip=false&overview=false"
+    return try {
+        OsrmGate.withPermit {
+            val response = osrmClient.get(url) {
+                if (OSRM_API_KEY.isNotEmpty()) header(OSRM_KEY_HEADER, OSRM_API_KEY)
+            }
+            val root = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            val code = root["code"]?.jsonPrimitive?.content
+            val waypoints = root["waypoints"]?.jsonArray
+            if (code != "Ok" || waypoints == null) {
+                Log.w(OSRM_TAG, "trip recusado: code=$code")
+                null
+            } else {
+                val order = waypoints.mapNotNull { wp ->
+                    wp.jsonObject["waypoint_index"]?.jsonPrimitive?.content?.toIntOrNull()
+                }
+                if (order.size == coords.size) order else null
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(OSRM_TAG, "trip falhou: ${classifyFailure(e)}")
+        null
+    }
+}
