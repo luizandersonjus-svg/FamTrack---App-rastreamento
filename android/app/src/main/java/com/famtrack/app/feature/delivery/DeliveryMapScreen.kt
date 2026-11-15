@@ -26,7 +26,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.NearMe
@@ -35,6 +37,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
@@ -50,6 +54,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +64,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -77,7 +84,9 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.LatLngBounds
+import com.famtrack.app.ui.history.osrmDrivingPath
 import com.google.maps.android.compose.CameraMoveStartedReason
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapProperties
@@ -85,8 +94,10 @@ import com.google.maps.android.compose.MapType
 import com.google.maps.android.compose.MapUiSettings
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
+import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -108,6 +119,18 @@ private const val GPS_MIN_INTERVAL_MS = 1_000L
  * o "seguir". Pinçar para dar zoom ou arrastar pouco continua seguindo.
  */
 private const val FOLLOW_RELEASE_DP = 80f
+
+/** Distância na tela entre uma seta e a próxima (constante em qualquer zoom). */
+private const val ARROW_SPACING_DP = 64f
+
+/** Fora do caminho além disso (m), pede um caminho novo a partir de onde está. */
+private const val OFF_ROUTE_M = 40.0
+
+/** Intervalo mínimo entre pedidos de caminho ao servidor. */
+private const val REROUTE_MIN_INTERVAL_MS = 10_000L
+
+/** Depois de uma falha do servidor, nova tentativa após este tempo. */
+private const val ROUTE_RETRY_MS = 30_000L
 
 private fun hasLocationPermission(context: Context): Boolean =
     listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
@@ -250,6 +273,112 @@ fun DeliveryMapScreen(
     val pagerState = rememberPagerState { routeOrdered.size }
     val selectedIndex = pagerState.currentPage.coerceIn(0, (total - 1).coerceAtLeast(0))
     val selected = routeOrdered.getOrNull(selectedIndex)
+
+    // --- Setas de direção ------------------------------------------------
+    var arrowMode by remember { mutableStateOf(loadArrowMode(context)) }
+    var arrowMenuOpen by remember { mutableStateOf(false) }
+    var routePath by remember { mutableStateOf<List<GeoPt>>(emptyList()) }
+    var routeFailed by remember { mutableStateOf(false) }
+    var lastRouteRequestMs by remember { mutableLongStateOf(0L) }
+    var routeJob by remember { mutableStateOf<Job?>(null) }
+    // Cartão em que o painel parou (não cada página durante o deslize).
+    val arrowTarget = routeOrdered.getOrNull(pagerState.settledPage)
+    val arrowStopsNow = arrowStops(arrowMode, routeOrdered, arrowTarget)
+    val arrowKey = arrowMode.name + ":" + arrowStopsNow.joinToString(",") { it.id.orEmpty() }
+
+    fun setArrowMode(mode: ArrowMode) {
+        arrowMode = mode
+        saveArrowMode(context, mode)
+    }
+
+    /** Pede ao OSRM o caminho de carro: posição atual -> paradas. */
+    fun requestRoute() {
+        val stops = arrowStops(arrowMode, routeOrdered, arrowTarget)
+        routeJob?.cancel()
+        if (stops.isEmpty()) {
+            routePath = emptyList()
+            routeFailed = false
+            return
+        }
+        val origin = myPosition
+        // Até um pacote só, sem saber onde o entregador está, não há caminho.
+        if (origin == null && stops.size < 2) {
+            routePath = emptyList()
+            routeFailed = false
+            return
+        }
+        val coords = listOfNotNull(origin) + stops.map { LatLng(it.latitude, it.longitude) }
+        lastRouteRequestMs = System.currentTimeMillis()
+        routeJob = scope.launch {
+            val path = try {
+                osrmDrivingPath(coords)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ErrorMessages.logSafe(e, "caminho das setas")
+                null
+            }
+            routeFailed = path == null
+            routePath = path.orEmpty().map { GeoPt(it.latitude, it.longitude) }
+        }
+    }
+
+    // Caminho novo quando mudam o modo ou as paradas, ou quando chega o 1º fix.
+    LaunchedEffect(arrowKey, myPosition != null) {
+        requestRoute()
+    }
+
+    // Saiu do caminho (errou a entrada, desvio): recalcula a partir de onde está.
+    LaunchedEffect(myPosition) {
+        val pos = myPosition ?: return@LaunchedEffect
+        val elapsed = System.currentTimeMillis() - lastRouteRequestMs
+        // Servidor falhou: tenta de novo de vez em quando.
+        if (routePath.size < 2) {
+            if (routeFailed && elapsed >= ROUTE_RETRY_MS) requestRoute()
+            return@LaunchedEffect
+        }
+        if (elapsed < REROUTE_MIN_INTERVAL_MS) return@LaunchedEffect
+        val off = projectOnPath(routePath, GeoPt(pos.latitude, pos.longitude))?.distanceM
+            ?: return@LaunchedEffect
+        if (off > OFF_ROUTE_M) requestRoute()
+    }
+
+    // O que falta do caminho (o trecho já percorrido some).
+    val remaining = remember(routePath, myPosition) {
+        remainingPath(routePath, myPosition?.let { GeoPt(it.latitude, it.longitude) })
+    }
+    // Zoom em degraus de 0,5 e região visível só com a câmera parada: as
+    // setas não são recalculadas a cada quadro da animação.
+    val zoomStep by remember {
+        derivedStateOf { (cameraPositionState.position.zoom * 2).toInt() / 2f }
+    }
+    var visibleBounds by remember { mutableStateOf<LatLngBounds?>(null) }
+    LaunchedEffect(cameraPositionState.isMoving, mapLoaded) {
+        if (!cameraPositionState.isMoving) {
+            visibleBounds = cameraPositionState.projection?.visibleRegion?.latLngBounds
+        }
+    }
+    val arrows = remember(remaining, zoomStep, visibleBounds) {
+        val ref = remaining.firstOrNull()
+        if (ref == null) {
+            emptyList()
+        } else {
+            val spacing = ARROW_SPACING_DP * density * metersPerPixel(zoomStep, ref.lat)
+            val all = arrowsAlong(remaining, spacing, firstAtM = spacing * 0.6, maxArrows = 400)
+            val bounds = visibleBounds
+            if (bounds == null) {
+                all.take(60)
+            } else {
+                // Só o que aparece na tela (com folga), para não encher o mapa de marcadores.
+                val latPad = (bounds.northeast.latitude - bounds.southwest.latitude) * 0.3
+                val lonPad = (bounds.northeast.longitude - bounds.southwest.longitude) * 0.3
+                all.filter {
+                    it.lat in (bounds.southwest.latitude - latPad)..(bounds.northeast.latitude + latPad) &&
+                        it.lon in (bounds.southwest.longitude - lonPad)..(bounds.northeast.longitude + lonPad)
+                }.take(120)
+            }
+        }
+    }
 
     // Primeira vez com dados: o painel abre na próxima entrega pendente.
     LaunchedEffect(total) {
@@ -478,6 +607,35 @@ fun DeliveryMapScreen(
                     ),
                     onMapLoaded = { mapLoaded = true }
                 ) {
+                    // Caminho: linha fina e clara + setas no sentido do trânsito.
+                    if (remaining.size >= 2) {
+                        Polyline(
+                            points = remaining.map { LatLng(it.lat, it.lon) },
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                            width = 4f * density,
+                            zIndex = 0.5f
+                        )
+                        val arrowIcon = remember(density) {
+                            try {
+                                BitmapDescriptorFactory.fromBitmap(buildArrowBitmap(density))
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                        if (arrowIcon != null) {
+                            arrows.forEach { arrow ->
+                                Marker(
+                                    state = MarkerState(position = LatLng(arrow.lat, arrow.lon)),
+                                    icon = arrowIcon,
+                                    anchor = Offset(0.5f, 0.5f),
+                                    rotation = arrow.bearing,
+                                    flat = true,
+                                    zIndex = 0.6f,
+                                    onClick = { true }
+                                )
+                            }
+                        }
+                    }
                     routeOrdered.forEachIndexed { index, delivery ->
                         val id = delivery.id.orEmpty()
                         key(id) {
@@ -499,6 +657,15 @@ fun DeliveryMapScreen(
                                     anchor = icon.anchor,
                                     zIndex = if (isSelected) 10f else if (delivery.delivered) 1f else 5f,
                                     onClick = {
+                                        // Bandeira tocada: as setas passam a levar até ela.
+                                        if (arrowMode == ArrowMode.ROUTE || arrowMode == ArrowMode.NUMBER) {
+                                            setArrowMode(ArrowMode.SELECTED)
+                                            Toast.makeText(
+                                                context,
+                                                "Setas levando até o pacote ${delivery.package_number}",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                         scope.launch { pagerState.animateScrollToPage(index) }
                                         true
                                     }
@@ -509,6 +676,27 @@ fun DeliveryMapScreen(
                 }
 
                 if (total > 0) {
+                    Box(modifier = Modifier.align(Alignment.TopStart).padding(12.dp)) {
+                        ArrowModeChip(
+                            mode = arrowMode,
+                            failed = routeFailed && arrowMode != ArrowMode.OFF,
+                            onClick = { arrowMenuOpen = true }
+                        )
+                        DropdownMenu(expanded = arrowMenuOpen, onDismissRequest = { arrowMenuOpen = false }) {
+                            ArrowMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = { Text(mode.label) },
+                                    leadingIcon = {
+                                        if (mode == arrowMode) Icon(Icons.Filled.Check, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        arrowMenuOpen = false
+                                        setArrowMode(mode)
+                                    }
+                                )
+                            }
+                        }
+                    }
                     FlagLegend(modifier = Modifier.align(Alignment.BottomStart).padding(12.dp))
                 }
                 SmallFloatingActionButton(
@@ -783,6 +971,32 @@ private fun DeliveryCard(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ArrowModeChip(mode: ArrowMode, failed: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        shadowElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = if (failed) "Setas: sem rota agora" else "Setas: ${mode.short}",
+                style = MaterialTheme.typography.labelLarge
+            )
         }
     }
 }

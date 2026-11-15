@@ -677,3 +677,20 @@ internal suspend fun osrmTripOrder(coords: List<LatLng>): List<Int>? {
         null
     }
 }
+
+/**
+ * Modo Entregas: caminho de CARRO pelas ruas passando por [coords] na ordem
+ * (posição atual -> paradas). O perfil driving do OSRM respeita mão única
+ * (tag oneway do OpenStreetMap) e proibições de conversão; com
+ * continue_straight=true o caminho não faz retorno nas paradas intermediárias.
+ * Devolve null se o servidor falhar ou não achar caminho.
+ */
+internal suspend fun osrmDrivingPath(coords: List<LatLng>): List<LatLng>? {
+    if (coords.size < 2) return null
+    val path = coords.joinToString(";") {
+        String.format(java.util.Locale.US, "%.6f,%.6f", it.longitude, it.latitude)
+    }
+    val url = "$OSRM_BASE_URL/route/v1/driving/$path" +
+        "?geometries=geojson&overview=full&continue_straight=true"
+    return osrmCall(url, "route-entregas", coords.size) { root -> parseRoute(root) }?.firstOrNull()
+}
