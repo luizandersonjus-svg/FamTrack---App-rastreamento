@@ -86,7 +86,10 @@ class HealthSnapRepository(private val context: Context) {
                         bpm_max = summary.max,
                         samples = summary.amostras
                     )
-                )
+                ) {
+                    // Sem select() a resposta vem vazia (return=minimal).
+                    select()
+                }
                 .decodeSingle<HealthSnapshot>()
         }
     }

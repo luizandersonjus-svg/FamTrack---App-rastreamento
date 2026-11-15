@@ -34,6 +34,8 @@ object SessionCleanup {
     // pausou ao entrar de novo (falha para o lado seguro).
     private val USER_PREFS = listOf(
         "geofence_state",
+        "geofence_outbox", // GeofenceTransitionOutbox.PREFS_NAME
+        "geofence_relay", // GeofenceWorker.RELAY_PREFS
         "low_battery_log",
         "famtrack_last_fix"
     )

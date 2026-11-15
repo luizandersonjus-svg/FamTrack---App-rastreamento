@@ -256,18 +256,28 @@ fun GeofenceScreen(
                         GeofenceItem(
                             geofence = geofence,
                             onToggle = { active ->
+                                // try/catch: exceção de rede num scope.launch da
+                                // composição derrubava o app.
                                 scope.launch {
-                                    geofenceRepository.toggleGeofence(geofence.id!!, active)
-                                    geofences = geofences.map {
-                                        if (it.id == geofence.id) it.copy(active = active) else it
+                                    try {
+                                        geofenceRepository.toggleGeofence(geofence.id!!, active)
+                                        geofences = geofences.map {
+                                            if (it.id == geofence.id) it.copy(active = active) else it
+                                        }
+                                        scheduleGeofenceCheck(context)
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("GeofenceScreen", "Falha ao alternar geofence", e)
                                     }
-                                    scheduleGeofenceCheck(context)
                                 }
                             },
                             onDelete = {
                                 scope.launch {
-                                    geofenceRepository.deleteGeofence(geofence.id!!)
-                                    geofences = geofences.filter { it.id != geofence.id }
+                                    try {
+                                        geofenceRepository.deleteGeofence(geofence.id!!)
+                                        geofences = geofences.filter { it.id != geofence.id }
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("GeofenceScreen", "Falha ao excluir geofence", e)
+                                    }
                                 }
                             }
                         )
@@ -366,19 +376,8 @@ fun GeofenceScreen(
 }
 
 fun scheduleGeofenceCheck(context: android.content.Context) {
-    val workRequest = PeriodicWorkRequestBuilder<GeofenceWorker>(
-        5, TimeUnit.MINUTES
-    ).setConstraints(
-        Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-    ).build()
-
-    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-        "geofence_check",
-        ExistingPeriodicWorkPolicy.UPDATE,
-        workRequest
-    )
+    // Intervalo real de 15 min (mínimo do WorkManager); ver GeofenceWorker.
+    GeofenceWorker.schedule(context)
 }
 
 @Composable

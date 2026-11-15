@@ -357,7 +357,8 @@ internal fun RoutePlaybackCameraFollow(
 @Composable
 internal fun PlaybackMapLayers(
     controller: RoutePlaybackController,
-    primaryColor: Color
+    primaryColor: Color,
+    widthPx: Float = 6f
 ) {
     val traveledByIndex = remember(controller.segmentIndex) {
         controller.displayLatLngs
@@ -367,7 +368,10 @@ internal fun PlaybackMapLayers(
         Polyline(
             points = traveledByIndex,
             color = primaryColor,
-            width = 6f
+            width = widthPx,
+            startCap = com.google.android.gms.maps.model.RoundCap(),
+            endCap = com.google.android.gms.maps.model.RoundCap(),
+            jointType = com.google.android.gms.maps.model.JointType.ROUND
         )
     }
     controller.avatarDescriptor?.let { descriptor ->

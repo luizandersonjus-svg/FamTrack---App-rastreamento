@@ -13,6 +13,10 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.famtrack.app.data.remote.AuthRepository
 import com.famtrack.app.feature.activity.ActivityScreen
+import com.famtrack.app.feature.delivery.DeliveryEditScreen
+import com.famtrack.app.feature.delivery.DeliveryHistoryScreen
+import com.famtrack.app.feature.delivery.DeliveryListScreen
+import com.famtrack.app.feature.delivery.DeliveryMapScreen
 import com.famtrack.app.feature.invite.InviteScreen
 import com.famtrack.app.feature.invite.JoinScreen
 import com.famtrack.app.feature.places.PlaceEditScreen
@@ -94,8 +98,9 @@ fun FamTrackNavigation() {
                     navController.popBackStack()
                 },
                 onJoined = {
+                    // Recria a Home já com a família (a pilha pode não ter "login").
                     navController.navigate("home") {
-                        popUpTo("login") { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 }
             )
@@ -137,6 +142,17 @@ fun FamTrackNavigation() {
                     navController.navigate("login") {
                         popUpTo(0) { inclusive = true }
                     }
+                },
+                onNavigateToJoinFamily = {
+                    navController.navigate("joinFamily")
+                },
+                onFamilyReady = {
+                    navController.navigate("home") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onNavigateToDeliveries = {
+                    navController.navigate("deliveries")
                 }
             )
         }
@@ -244,6 +260,51 @@ fun FamTrackNavigation() {
 
         composable("routes") {
             RouteSearchScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        // Modo Entregas: mapa com bandeiras, lista da rota e cadastro de pacote.
+        composable("deliveries") {
+            DeliveryMapScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onOpenList = {
+                    navController.navigate("deliveryList")
+                },
+                onAddPackage = {
+                    navController.navigate("deliveryAdd")
+                }
+            )
+        }
+
+        composable("deliveryList") {
+            DeliveryListScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onAddPackage = {
+                    navController.navigate("deliveryAdd")
+                },
+                onOpenHistory = {
+                    navController.navigate("deliveryHistory")
+                }
+            )
+        }
+
+        composable("deliveryHistory") {
+            DeliveryHistoryScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable("deliveryAdd") {
+            DeliveryEditScreen(
                 onNavigateBack = {
                     navController.popBackStack()
                 }

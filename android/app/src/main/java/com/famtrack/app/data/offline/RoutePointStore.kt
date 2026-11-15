@@ -141,7 +141,15 @@ internal class RoutePointStore(private val context: Context) {
         ensureReady()
         synchronized(lock) {
             val existing = dao.all()
-            val merged = trimToLimit(existing + point.toEntity(existing.size.toLong()))
+            // Posição monotônica: existing.size repetia posições depois que
+            // pontos sincronizados eram removidos (ordem de coleta embaralhada).
+            val nextPosition = (existing.maxOfOrNull { it.position } ?: -1L) + 1L
+            val merged = trimToLimit(existing + point.toEntity(nextPosition))
+            if (merged.size < existing.size + 1) {
+                // insertAll (IGNORE) não remove nada: sem isto o teto da fila
+                // nunca era aplicado e os descartados continuavam no banco.
+                dao.deleteNotIn(merged.map { it.id })
+            }
             dao.insertAll(merged)
         }
     }

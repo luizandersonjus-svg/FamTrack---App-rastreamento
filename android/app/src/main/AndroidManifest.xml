@@ -74,6 +74,36 @@
             </intent-filter>
         </activity>
 
+        <!--
+            Health Connect: politica de privacidade dos dados de saude.
+            Sem estas duas entradas o Health Connect recusa o pedido de
+            permissao na hora (o contrato devolve um conjunto vazio).
+            - Android 13 ou anterior: ACTION_SHOW_PERMISSIONS_RATIONALE.
+            - Android 14+: activity-alias com VIEW_PERMISSION_USAGE +
+              HEALTH_PERMISSIONS (protegido por START_VIEW_PERMISSION_USAGE,
+              que so o sistema possui).
+        -->
+        <activity
+            android:name=".feature.healthsnap.HealthPrivacyPolicyActivity"
+            android:exported="true"
+            android:label="@string/health_privacy_title"
+            android:theme="@style/Theme.FamTrack">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+
+        <activity-alias
+            android:name=".ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".feature.healthsnap.HealthPrivacyPolicyActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- Serviço de Localização -->
         <service
             android:name=".service.LocationService"

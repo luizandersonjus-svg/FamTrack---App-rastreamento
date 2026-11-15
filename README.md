@@ -27,8 +27,11 @@ App Android nativo para rastreamento de localização familiar em tempo real.
 3. Execute no SQL Editor, nesta ordem: `setup_supabase.sql`, `02_migracao_correcoes.sql`,
    `fix_rls_recursion.sql`, `03_feature_migracao.sql`, `04_route_history.sql`,
    `05_places_types.sql`, `06_sos_correcoes.sql`, `07_locations_upsert.sql`,
-   `08_telemetry.sql`, `09_notifications_delete.sql` e `10_security_hardening.sql`
-   (em um banco já existente, basta rodar o `10_security_hardening.sql`)
+   `08_telemetry.sql`, `09_notifications_delete.sql`, `10_security_hardening.sql`,
+   `11_family_rpcs_and_member_security.sql` e `12_security_lints.sql`
+   (em um banco já existente, basta rodar o `10_security_hardening.sql`, depois o
+   `11_family_rpcs_and_member_security.sql` — leia antes os PRÉ-CHECKS no topo do 11 —
+   e por fim o `12_security_lints.sql`)
 4. Copie a URL e a anon key
 
 ### 2. Configure o Google Cloud
@@ -51,19 +54,33 @@ SUPABASE_ANON_KEY=sua-chave-anon
 GOOGLE_MAPS_API_KEY=sua-chave-google-maps
 ```
 
-4. Substitua `SEU_WEB_CLIENT_ID_AQUI` em `LoginScreen.kt` pelo Web Client ID
+4. Coloque o Web Client ID em `default_web_client_id`, no arquivo
+   `android/app/src/main/res/values/strings.xml` (lido pelo `LoginScreen.kt`)
 
 ### 4. Rode o App
 
 1. Conecte um celular via USB
 2. Clique no botão ▶️ (Run)
 
+## Testes
+
+Testes unitários JVM (sem emulador) em `android/app/src/test/`:
+
+```bash
+cd android
+./gradlew :app:testDebugUnitTest
+```
+
+Cobrem as regras puras do rastro ao vivo (`LiveTrailLogic`: máquina de estados
+parado/em movimento, auto-ocultação, segmentação, decimação) e o payload de
+update de geofence do SEC-1. As policies de RLS do `sql/10_security_hardening.sql`
+ainda não têm teste automatizado.
+
 ## Estrutura do Projeto
 
 ```
 famtrack/
-├── sql/
-│   └── 01_schema.sql          # Schema do banco de dados
+├── sql/                       # Schema e migrações (01 a 10)
 ├── android/
 │   ├── app/
 │   │   ├── build.gradle.kts   # Dependências do app
@@ -74,7 +91,11 @@ famtrack/
 │   │           ├── MainActivity.kt
 │   │           ├── data/
 │   │           │   ├── model/      # Modelos de dados
-│   │           │   └── remote/     # Repositórios (Supabase)
+│   │           │   ├── remote/     # Repositórios (Supabase)
+│   │           │   ├── offline/    # Fila offline (Room) e rastro ao vivo
+│   │           │   ├── session/    # Logout completo (SessionCleanup)
+│   │           │   └── observability/
+│   │           ├── feature/        # Convites, lugares, SOS, rotas, privacidade...
 │   │           ├── ui/
 │   │           │   ├── theme/      # Tema do app
 │   │           │   ├── auth/       # Telas de login/cadastro
@@ -85,8 +106,9 @@ famtrack/
 │   │           │   └── settings/
 │   │           ├── service/        # Serviço de localização
 │   │           └── util/           # Utilitários
+│   ├── app/src/test/          # Testes unitários JVM
 │   └── build.gradle.kts       # Dependências do projeto
-├── PLANO.md                   # Plano detalhado
+├── PLANO.md                   # Plano original (histórico)
 └── SETUP.md                   # Guia de setup
 ```
 
@@ -110,9 +132,11 @@ famtrack/
 
 ## Próximos Passos
 
-- [ ] Implementar compartilhamento de família (convites)
+- [x] Compartilhamento de família (convites)
+- [x] Modo offline (fila de pontos de rota)
+- [x] Rastro ao vivo no mapa
+- [ ] Testes automatizados das policies de RLS
 - [ ] Adicionar chat entre membros
-- [ ] Implementar modo offline
 - [ ] Adicionar suporte a iOS (Flutter/React Native)
 - [ ] Publicar na Google Play Store
 

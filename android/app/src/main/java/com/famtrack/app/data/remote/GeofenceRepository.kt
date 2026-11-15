@@ -2,17 +2,36 @@ package com.famtrack.app.data.remote
 
 import com.famtrack.app.data.model.Geofence
 import io.github.jan.supabase.postgrest.from
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 class GeofenceRepository {
 
+    companion object {
+        // JsonObject explícito: Map<String, Any?> não é serializável pelo
+        // kotlinx.serialization e fazia o update falhar em tempo de execução.
+        internal fun updatePayload(geofence: Geofence): JsonObject = buildJsonObject {
+            put("name", geofence.name)
+            put("center_lat", geofence.center_lat)
+            put("center_lon", geofence.center_lon)
+            put("radius_meters", geofence.radius_meters)
+            put("color", geofence.color)
+            put("active", geofence.active)
+            geofence.placeId?.let { put("place_id", it) }
+        }
+    }
+
     private val client = SupabaseClient.getInstance()
 
     // Criar geofence
     suspend fun createGeofence(geofence: Geofence): Geofence {
+        // select(): sem ele a resposta vem vazia (return=minimal) e o
+        // decodeSingle falhava mesmo com a geofence já gravada.
         return client.from("geofences")
-            .insert(geofence)
+            .insert(geofence) {
+                select()
+            }
             .decodeSingle<Geofence>()
     }
 
@@ -29,19 +48,8 @@ class GeofenceRepository {
 
     // Atualizar geofence
     suspend fun updateGeofence(geofence: Geofence) {
-        // JsonObject explícito: Map<String, Any?> não é serializável pelo
-        // kotlinx.serialization e fazia o update falhar em tempo de execução.
-        val payload = buildJsonObject {
-            put("name", geofence.name)
-            put("center_lat", geofence.center_lat)
-            put("center_lon", geofence.center_lon)
-            put("radius_meters", geofence.radius_meters)
-            put("color", geofence.color)
-            put("active", geofence.active)
-            geofence.placeId?.let { put("place_id", it) }
-        }
         client.from("geofences")
-            .update(payload) {
+            .update(updatePayload(geofence)) {
                 filter {
                     eq("id", geofence.id!!)
                 }

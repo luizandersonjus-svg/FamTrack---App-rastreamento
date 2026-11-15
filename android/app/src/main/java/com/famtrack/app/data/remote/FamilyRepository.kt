@@ -211,26 +211,8 @@ class FamilyRepository {
         ).decodeList()
     }
 
-    // Adicionar membro à família (para usos futuros de convite manual)
-    suspend fun addMember(
-        familyId: String,
-        userId: String,
-        role: String = "member",
-        accepted: Boolean = false
-    ): FamilyMember {
-        return client.from("family_members")
-            .insert(
-                buildJsonObject {
-                    put("family_id", familyId)
-                    put("user_id", userId)
-                    put("role", role)
-                    put("accepted", accepted)
-                }
-            ) {
-                select()
-            }
-            .decodeSingle<FamilyMember>()
-    }
+    // addMember (INSERT direto) foi removido: desde o sql/11 membros só entram
+    // pelas RPCs create_family / join_family_by_code (o banco nega o INSERT).
 
     // Obter membros da família
     suspend fun getFamilyMembers(familyId: String): List<FamilyMember> {
@@ -241,16 +223,6 @@ class FamilyRepository {
                 }
             }
             .decodeList<FamilyMember>()
-    }
-
-    // Aceitar convite
-    suspend fun acceptInvite(memberId: String) {
-        client.from("family_members")
-            .update(mapOf("accepted" to true)) {
-                filter {
-                    eq("id", memberId)
-                }
-            }
     }
 
     // Remover membro

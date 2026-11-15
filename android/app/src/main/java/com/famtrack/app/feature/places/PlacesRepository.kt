@@ -5,6 +5,8 @@ import com.famtrack.app.data.remote.GeofenceRepository
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.feature.common.ErrorMessages
 import io.github.jan.supabase.postgrest.from
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * CRUD da coleção `places`. Ao salvar/excluir um local, também registra/remove
@@ -43,8 +45,12 @@ class PlacesRepository {
 
     suspend fun createPlace(place: Place): Place? {
         val placeId = try {
+            // select(): sem ele a resposta vem vazia (return=minimal), o
+            // decodeSingle falhava e o local ficava gravado sem geofence.
             SupabaseClient.getInstance().from("places")
-                .insert(place.copy(geofence_id = null))
+                .insert(place.copy(geofence_id = null)) {
+                    select()
+                }
                 .decodeSingle<Place>()
                 .id
         } catch (e: Exception) {
@@ -92,8 +98,21 @@ class PlacesRepository {
     }
 
     suspend fun updatePlace(place: Place) {
+        // Payload explícito: serializar o data class omite campos iguais ao
+        // valor padrão (type = "OUTRO", radius_meters = 150), e a edição para
+        // esses valores nunca era gravada.
+        val payload = buildJsonObject {
+            put("name", place.name)
+            put("type", place.type)
+            put("center_lat", place.center_lat)
+            put("center_lon", place.center_lon)
+            put("radius_meters", place.radius_meters)
+            place.alert_on_enter?.let { put("alert_on_enter", it) }
+            place.alert_on_exit?.let { put("alert_on_exit", it) }
+            place.geofence_id?.let { put("geofence_id", it) }
+        }
         SupabaseClient.getInstance().from("places")
-            .update(place) {
+            .update(payload) {
                 filter {
                     eq("id", place.id!!)
                 }

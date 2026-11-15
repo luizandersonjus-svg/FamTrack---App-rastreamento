@@ -1,6 +1,7 @@
 package com.famtrack.app.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -8,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
@@ -28,6 +30,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import coil.compose.AsyncImage
 import com.famtrack.app.R
 import com.famtrack.app.data.remote.FamilyRepository
@@ -35,12 +38,15 @@ import com.famtrack.app.data.remote.HealthConnectRepository
 import com.famtrack.app.data.remote.HeartRateSummary
 import com.famtrack.app.data.remote.SupabaseClient
 import com.famtrack.app.data.session.SessionCleanup
+import com.famtrack.app.feature.healthsnap.HealthPrivacyPolicyActivity
 import com.famtrack.app.feature.healthsnap.HealthSnapRepository
+import com.famtrack.app.feature.onboarding.BatteryOptimization
 import com.famtrack.app.feature.privacy.PrivacyPrefs
 import com.famtrack.app.feature.privacy.PrivacyRepository
 import com.famtrack.app.ui.history.readSpeedAlertPref
 import com.famtrack.app.ui.history.speedAlertFlow
 import com.famtrack.app.ui.history.writeSpeedAlertPref
+import com.famtrack.app.util.StepPermission
 import io.github.jan.supabase.auth.auth
 import kotlinx.coroutines.launch
 
@@ -73,6 +79,35 @@ fun SettingsScreen(
     var privacyUserId by remember { mutableStateOf<String?>(null) }
     var privacyFamilyId by remember { mutableStateOf<String?>(null) }
 
+    // Contagem de passos (permissão "Atividade física", Android 10+). Quem já
+    // passou pelo onboarding antes desta etapa existir ativa por aqui.
+    var stepsGranted by remember { mutableStateOf(StepPermission.isGranted(context)) }
+    var stepsDeniedOnce by remember { mutableStateOf(false) }
+    // Revalida ao voltar dos ajustes do Android (o usuário pode ter mudado lá).
+    LifecycleResumeEffect(Unit) {
+        stepsGranted = StepPermission.isGranted(context)
+        onPauseOrDispose { }
+    }
+    val stepsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        stepsGranted = granted
+        if (granted) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.settings_steps_granted_toast),
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            stepsDeniedOnce = true
+            Toast.makeText(
+                context,
+                context.getString(R.string.settings_steps_denied_toast),
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     // Conta logada no momento (nome do Google/salto, e-mail)
     val currentUser = remember {
         SupabaseClient.getInstance().auth.currentUserOrNull()?.let { u ->
@@ -99,12 +134,26 @@ fun SettingsScreen(
                 privacyUserId = user.id
                 val member = FamilyRepository().getUserFamily(user.id)
                 privacyFamilyId = member?.family_id
+                // A pausa é aplicada pela preferência LOCAL (LocationService lê
+                // privacy_prefs). Antes a chave exibia o valor do servidor sem
+                // sincronizar o local: podia mostrar "pausado" enquanto o
+                // aparelho seguia enviando. Reconcilia para o lado seguro
+                // (pausado se qualquer um dos dois estiver pausado).
+                val localPaused = PrivacyPrefs.isSharingPaused(context)
                 val flags = privacyRepository.getMyFlags(user.id)
-                sharingPaused = flags?.sharing_paused ?: PrivacyPrefs.isSharingPaused(context)
+                val paused = localPaused || flags?.sharing_paused == true
+                sharingPaused = paused
+                if (paused != localPaused) PrivacyPrefs.setSharingPaused(context, paused)
+                if (flags != null && flags.sharing_paused != paused) {
+                    try {
+                        privacyRepository.setSharingPaused(user.id, paused)
+                    } catch (_: Exception) { }
+                }
                 shareHealth = flags?.share_health ?: PrivacyPrefs.isSharingHealth(context)
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            sharingPaused = PrivacyPrefs.isSharingPaused(context)
         } finally {
             privacyLoading = false
         }
@@ -343,6 +392,26 @@ fun SettingsScreen(
                             }
                         }
                     )
+                    if (StepPermission.isRuntimePermission) {
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                        SettingsItem(
+                            icon = Icons.AutoMirrored.Filled.DirectionsWalk,
+                            title = stringResource(R.string.settings_steps_title),
+                            subtitle = stringResource(
+                                if (stepsGranted) R.string.settings_steps_on
+                                else R.string.settings_steps_off
+                            ),
+                            onClick = {
+                                // Já ativada (para quem quiser desligar) ou recusada antes
+                                // (o Android pode não perguntar mais): abre os ajustes do app.
+                                if (stepsGranted || stepsDeniedOnce) {
+                                    BatteryOptimization.openAppSettings(context)
+                                } else {
+                                    stepsPermissionLauncher.launch(StepPermission.PERMISSION)
+                                }
+                            }
+                        )
+                    }
                 }
             }
 
@@ -413,25 +482,27 @@ fun SettingsScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             ) {
-                Column {
-                    var notificationsEnabled by remember { mutableStateOf(true) }
-                    SettingsSwitchItem(
-                        icon = Icons.Default.Notifications,
-                        title = "Notificacoes push",
-                        subtitle = "Receber alertas de SOS e geofences",
-                        checked = notificationsEnabled,
-                        onCheckedChange = { notificationsEnabled = it }
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                    var locationSharing by remember { mutableStateOf(true) }
-                    SettingsSwitchItem(
-                        icon = Icons.Default.LocationOn,
-                        title = "Compartilhar localizacao",
-                        subtitle = "Permitir que membros vejam sua posicao",
-                        checked = locationSharing,
-                        onCheckedChange = { locationSharing = it }
-                    )
-                }
+                // Antes havia dois interruptores "de enfeite" (só mudavam estado em
+                // memória). O de notificações agora abre o ajuste real do sistema;
+                // pausar a localização fica no interruptor de privacidade.
+                SettingsItem(
+                    icon = Icons.Default.Notifications,
+                    title = "Notificações",
+                    subtitle = "Escolher quais alertas (SOS, chegadas e saídas) este aparelho recebe",
+                    onClick = {
+                        val intent = android.content.Intent(
+                            android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                        ).putExtra(
+                            android.provider.Settings.EXTRA_APP_PACKAGE,
+                            context.packageName
+                        ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: android.content.ActivityNotFoundException) {
+                            android.util.Log.w("Settings", "Ajustes de notificação indisponíveis", e)
+                        }
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -802,6 +873,13 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 Text("Versao 1.0.0")
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("App de rastreamento familiar.")
+                Spacer(modifier = Modifier.height(8.dp))
+                // TRACK-3: atribuição exigida pela licença ODbL do OpenStreetMap.
+                Text(
+                    "Rotas e rastro ajustados às ruas com dados © colaboradores do " +
+                        "OpenStreetMap (licença ODbL), via OSRM.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         },
         confirmButton = {
@@ -963,6 +1041,12 @@ fun DevicesDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                TextButton(
+                    onClick = { HealthPrivacyPolicyActivity.open(context) },
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+                ) {
+                    Text(stringResource(R.string.health_privacy_link))
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 when {
                     checking -> {

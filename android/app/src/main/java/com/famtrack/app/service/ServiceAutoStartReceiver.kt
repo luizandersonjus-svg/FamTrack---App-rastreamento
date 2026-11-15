@@ -22,6 +22,13 @@ class ServiceAutoStartReceiver : BroadcastReceiver() {
 
         val ids = LocationService.lastPersistedIds(context) ?: return
         if (!LocationService.locationPermissionGranted(context)) return
+        // Após o boot o app está em segundo plano: sem ACCESS_BACKGROUND_LOCATION
+        // (Android 10+) o serviço não recebe localização e, no Android 14+, o
+        // startForeground do tipo "location" é recusado pelo sistema.
+        if (!com.famtrack.app.util.Permissions.hasBackgroundLocationPermission(context)) {
+            Log.i(TAG, "sem localização em segundo plano; tracking não retomado: $action")
+            return
+        }
         if (isSharingPaused(context)) {
             Log.i(TAG, "compartilhamento pausado; tracking não retomado")
             return
